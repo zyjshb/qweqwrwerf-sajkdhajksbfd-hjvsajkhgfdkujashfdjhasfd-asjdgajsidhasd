@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+.claude/
+yandere_config.json
+temp_saki_*.wav
+*.ckpt
+*.pth
+models/
+save_slot_*.json
+custom_characters.json
