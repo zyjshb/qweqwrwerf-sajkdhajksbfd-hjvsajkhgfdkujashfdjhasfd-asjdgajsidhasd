@@ -615,11 +615,6 @@ const hijackText = '你走不掉的你走不掉的你走不掉的...'
 let hijackIndex = 0
 
 const disabled = computed(() => props.gameOver || props.inputLocked)
-const inputPlaceholder = computed(() => {
-  if (props.gameOver) return '游戏结束...'
-  if (props.hijackActive) return hijackText
-  return '输入你想说的话...'
-})
 
 // ── Typewriter Logic ──
 const typewriterDisplayThink = ref('')
@@ -681,75 +676,81 @@ function playTypewriterBeep(isGlitch = false) {
 function startTypewriterSequence(think = '', speech = '', translation = '') {
   if (typewriterInterval) clearInterval(typewriterInterval)
 
+  // Capture think text now (it's known when this starts).
+  // Speech and translation are captured on mode transition (they may arrive later).
+  const _think = think || props.thinkText || ''
+  let _speech = speech || ''
+  let _trans = translation || ''
+  let cleanSpeech = ''
+
   typewriterDisplayThink.value = ''
   typewriterDisplaySpeech.value = ''
   translationTypewriterDisplay.value = ''
   typewriterMode.value = 'think'
   emit('typewriter-state', true)
-  
+
   let thinkIdx = 0
   let speechIdx = 0
   let transIdx = 0
-  
+
   const finishSequence = () => {
     clearInterval(typewriterInterval)
     typewriterInterval = null
     typewriterMode.value = 'idle'
     emit('typewriter-state', false)
 
-    // Emit typing-complete immediately; the messages.length watcher
-    // will clear the typewriter displays when the message is pushed to chatMessages
     setTimeout(() => {
       emit('typing-complete')
     }, 300)
   }
-  
+
   const tick = () => {
     if (typewriterMode.value === 'think') {
-      const target = props.thinkText || think || ''
+      const target = _think
       if (thinkIdx < target.length) {
         typewriterDisplayThink.value += target[thinkIdx]
         thinkIdx++
         playTypewriterBeep(false)
         scrollToBottom()
       } else if (props.speechText || speech || speechQueued) {
+        // Capture speech text NOW on mode transition (may have arrived during think)
+        _speech = props.speechText || speech || ''
+        cleanSpeech = _speech.replace(/\|\|.*?\|\|/g, '').replace(/<think>.*?<\/think>/gs, '').trim()
         typewriterMode.value = 'speech'
       }
     }
-    
+
     else if (typewriterMode.value === 'speech') {
-      const target = props.speechText || speech || ''
-      const cleanTarget = target.replace(/\|\|.*?\|\|/g, '').replace(/<think>.*?<\/think>/gs, '').trim()
-      
-      const useCarnage = (props.suspicion >= 85) || DANGER_WORDS_CARNAGE.some(w => cleanTarget.toLowerCase().includes(w))
-      
-      if (useCarnage && typewriterDisplaySpeech.value !== cleanTarget) {
-        typewriterDisplaySpeech.value = cleanTarget
-        speechIdx = cleanTarget.length
+      const useCarnage = (props.suspicion >= 85) || DANGER_WORDS_CARNAGE.some(w => cleanSpeech.toLowerCase().includes(w))
+
+      if (useCarnage && typewriterDisplaySpeech.value !== cleanSpeech) {
+        typewriterDisplaySpeech.value = cleanSpeech
+        speechIdx = cleanSpeech.length
         playTypewriterBeep(true)
         triggerCarnageGlitches()
         scrollToBottom()
-      } else if (speechIdx < cleanTarget.length) {
-        const char = cleanTarget[speechIdx]
+      } else if (speechIdx < cleanSpeech.length) {
+        const char = cleanSpeech[speechIdx]
         typewriterDisplaySpeech.value += char
         speechIdx++
-        
-        detectAndTriggerDangerGlitches(typewriterDisplaySpeech.value, cleanTarget)
+
+        detectAndTriggerDangerGlitches(typewriterDisplaySpeech.value, cleanSpeech)
         playTypewriterBeep(false)
         scrollToBottom()
       } else {
         if (props.translationText || translation || translationQueued) {
+          // Capture translation text NOW on mode transition
+          _trans = props.translationText || translation || ''
           typewriterMode.value = 'translation'
         } else {
           finishSequence()
         }
       }
     }
-    
+
     else if (typewriterMode.value === 'translation') {
-      const target = props.translationText || translation || ''
-      if (transIdx < target.length) {
-        translationTypewriterDisplay.value += target[transIdx]
+      if (transIdx < _trans.length) {
+        translationTypewriterDisplay.value += _trans[transIdx]
         transIdx++
         scrollToBottom()
       } else {
@@ -825,12 +826,29 @@ watch(() => props.speechText, (newSpeech) => {
 
 watch(() => props.translationText, (newTrans) => {
   if (!newTrans) return
-  if (typewriterMode.value === 'idle') {
-    shaked = false
-    startTypewriterSequence()
-  } else if (typewriterMode.value === 'think' || typewriterMode.value === 'speech') {
-    // Think or speech is still playing — queue translation
+  if (typewriterMode.value === 'think' || typewriterMode.value === 'speech') {
+    // Still typing think or speech — queue translation to type after
     translationQueued = true
+  } else if (typewriterMode.value === 'idle') {
+    // Translation arrived after main typewriter finished.
+    // Type only the translation text without restarting the whole sequence.
+    translationTypewriterDisplay.value = ''
+    typewriterMode.value = 'translation'
+    emit('typewriter-state', true)
+    let transIdx = 0
+    typewriterInterval = setInterval(() => {
+      if (transIdx < newTrans.length) {
+        translationTypewriterDisplay.value += newTrans[transIdx]
+        transIdx++
+        scrollToBottom()
+      } else {
+        clearInterval(typewriterInterval)
+        typewriterInterval = null
+        typewriterMode.value = 'idle'
+        emit('typewriter-state', false)
+        setTimeout(() => emit('typing-complete'), 300)
+      }
+    }, Math.max(1, 30 / speedMultiplier.value))
   }
 })
 
@@ -993,6 +1011,11 @@ function playTypewriterClickSound(isEnter = false) {
 
 // ── Keyboard Hijack ──
 function handleKeydown(e) {
+  if (props.inputLocked) {
+    e.preventDefault()
+    return
+  }
+
   if (props.hijackActive) {
     e.preventDefault()
     if (hijackIndex < hijackText.length) {
@@ -1018,7 +1041,7 @@ let beepCtx = null
 
 function doSend() {
   const text = inputText.value.trim()
-  if (!text || props.gameOver) return
+  if (!text || props.gameOver || props.inputLocked) return
 
   if (props.hijackActive) {
     emit('send', inputText.value)

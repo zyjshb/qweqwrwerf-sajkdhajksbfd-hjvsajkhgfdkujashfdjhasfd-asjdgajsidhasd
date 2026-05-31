@@ -322,17 +322,17 @@ watch(() => props.active, (isActive) => {
       // Sound sync click crunches during text spawning
       if (ticks % 2 === 0) {
         try {
-          const ctx = new (window.AudioContext || window.webkitAudioContext)()
-          const osc = ctx.createOscillator()
-          const gain = ctx.createGain()
+          if (!synthCtx) synthCtx = new (window.AudioContext || window.webkitAudioContext)()
+          const osc = synthCtx.createOscillator()
+          const gain = synthCtx.createGain()
           osc.type = 'sawtooth'
-          osc.frequency.setValueAtTime(50 + Math.random() * 60, ctx.currentTime)
+          osc.frequency.setValueAtTime(50 + Math.random() * 60, synthCtx.currentTime)
           osc.connect(gain)
-          gain.connect(ctx.destination)
-          gain.gain.setValueAtTime(0.05, ctx.currentTime)
-          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1)
+          gain.connect(synthCtx.destination)
+          gain.gain.setValueAtTime(0.05, synthCtx.currentTime)
+          gain.gain.exponentialRampToValueAtTime(0.001, synthCtx.currentTime + 0.1)
           osc.start()
-          osc.stop(ctx.currentTime + 0.1)
+          osc.stop(synthCtx.currentTime + 0.1)
         } catch (e) {}
       }
       

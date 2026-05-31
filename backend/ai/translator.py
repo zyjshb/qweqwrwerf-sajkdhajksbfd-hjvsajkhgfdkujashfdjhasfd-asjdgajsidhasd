@@ -22,13 +22,14 @@ def parse_api_response(raw_text, user_input, game_state, skip_offline_translatio
     raw_delta = None
     spoken_text = raw_text
 
-    # ---- 1. Split on the canonical || delimiter ----
-    if "||" in raw_text:
+    # ---- 1. Extract delta from the LAST ||...|| block (most reliable) ----
+    delta_matches = list(re.finditer(r'\|\|(\{.*?"favorability".*?\})\|\|', raw_text))
+    if delta_matches:
         try:
-            parts = raw_text.split("||")
-            spoken_text = parts[0].strip()
-            json_str = parts[1].strip()
-            raw_delta = json.loads(json_str)
+            last = delta_matches[-1]
+            raw_delta = json.loads(last.group(1))
+            # Remove ALL || blocks from spoken text
+            spoken_text = re.sub(r'\|\|.*?\|\|', '', raw_text).strip()
         except Exception:
             pass
 
@@ -38,30 +39,29 @@ def parse_api_response(raw_text, user_input, game_state, skip_offline_translatio
         if match:
             try:
                 raw_delta = json.loads(match.group(0))
-                spoken_text = raw_text.replace(
-                    match.group(0), ""
-                ).replace("||", "").strip()
+                spoken_text = raw_text.replace(match.group(0), "").replace("||", "").strip()
             except Exception:
                 pass
 
     # ---- 3. Strip any residual || tokens from spoken text ----
-    if "||" in spoken_text:
-        spoken_text = spoken_text.split("||")[0].strip()
+    spoken_text = re.sub(r'\|\|.*?\|\|', '', spoken_text).strip()
 
-    # ---- 4. Extract <think>...</think> block ----
+    # ---- 4. Extract <think> or <thinking> block ----
     think_content = ""
     lower_text = spoken_text.lower()
-    start_idx = lower_text.find("<think>")
-    if start_idx != -1:
-        end_idx = lower_text.find("</think>", start_idx + 7)
-        if end_idx != -1:
-            think_content = spoken_text[start_idx + 7:end_idx].strip()
-            spoken_text = (
-                spoken_text[:start_idx] + " " + spoken_text[end_idx + 8:]
-            )
-        else:
-            think_content = spoken_text[start_idx + 7:].strip()
-            spoken_text = spoken_text[:start_idx]
+    for tag in ("<think>", "<thinking>"):
+        start_idx = lower_text.find(tag)
+        if start_idx != -1:
+            tag_len = len(tag)
+            end_tag = "</think>" if tag == "<think>" else "</thinking>"
+            end_idx = lower_text.find(end_tag, start_idx + tag_len)
+            if end_idx != -1:
+                think_content = spoken_text[start_idx + tag_len:end_idx].strip()
+                spoken_text = spoken_text[:start_idx] + " " + spoken_text[end_idx + len(end_tag):]
+            else:
+                think_content = spoken_text[start_idx + tag_len:].strip()
+                spoken_text = spoken_text[:start_idx]
+            break
 
     # ---- 5. Strip inner monologue leaked into spoken text ----
     spoken_text = _strip_monologue_from_spoken(spoken_text)

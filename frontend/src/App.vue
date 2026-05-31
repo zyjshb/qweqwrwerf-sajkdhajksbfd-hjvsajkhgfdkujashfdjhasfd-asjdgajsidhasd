@@ -320,6 +320,9 @@ const bsodActive = ref(false)
 const screenFreezeActive = ref(false)
 const fakePopups = ref([])
 let popupIdCounter = 0
+let fakePopupInterval = null
+let titleInterval = null
+let dayLoopInterval = null
 
 // ── Carnage mode ────────────────────────────────────────────────
 
@@ -370,15 +373,27 @@ const endingDefaultTitle = computed(() => {
 function onEnterGame() {
   game.reset()
   currentView.value = 'game'
-  // Connect WebSocket now (if not already connected)
   if (!ws.connected.value) {
     ws.connect()
   }
-  // Tell backend to launch game and send initial plot using savedConfig or game.state.language
   const selectedLang = savedConfig.selected_language || game.state.language || '中文'
-  setTimeout(() => {
+  // Wait for WebSocket, then re-send config + launch.
+  // Belt-and-suspenders: earlier CONFIG_UPDATE may have been sent before WS connected.
+  const doLaunch = () => {
+    if (!ws.connected.value) {
+      setTimeout(doLaunch, 100)
+      return
+    }
+    ws.send('CONFIG_UPDATE', {
+      api_key: savedConfig.api_key || '',
+      api_base: savedConfig.api_base || '',
+      model_name: savedConfig.model_name || '',
+      selected_language: selectedLang,
+    })
+    ws.send('LANGUAGE_CHANGE', { language: selectedLang })
     ws.send('LAUNCH_GAME', { language: selectedLang })
-  }, 300)
+  }
+  setTimeout(doLaunch, 300)
 }
 
 function onLauncherConfig(config) {
@@ -551,6 +566,8 @@ function setupWSHandlers() {
     if (p.role === 'assistant') {
       pendingAssistantMessage.value = newMsg
       ttsPending.value = true // Lock input until TTS finishes
+      // Safety: unlock input if TTS never arrives (disabled or failed)
+      setTimeout(() => { ttsPending.value = false }, 8000)
       // Fallback: push after 15s if typewriter never finishes
       setTimeout(() => {
         if (pendingAssistantMessage.value === newMsg) {
@@ -803,9 +820,10 @@ function spawnFakePopupsCascade() {
     } catch (e) {}
   }
 
-  const interval = setInterval(() => {
+  fakePopupInterval = setInterval(() => {
     if (count >= maxPopups || !activeGlitches.value.has('fake_error')) {
-      clearInterval(interval)
+      clearInterval(fakePopupInterval)
+      fakePopupInterval = null
       return
     }
     
@@ -956,9 +974,10 @@ watch(() => activeGlitches.value.has('title_corruption'), (active) => {
     const titles = ['看着我！', 'DON\'T LEAVE', '離さない', 'FOREVER', '愛してる', 'My Love...']
     const origTitle = document.title
     let count = 0
-    const interval = setInterval(() => {
-      if (count >= 8) {
-        clearInterval(interval)
+    titleInterval = setInterval(() => {
+      if (count >= 8 || !activeGlitches.value.has('title_corruption')) {
+        clearInterval(titleInterval)
+        titleInterval = null
         document.title = origTitle
         return
       }
@@ -974,9 +993,10 @@ watch(() => activeGlitches.value.has('day_loop'), (active) => {
   if (active) {
     dayLoopOverride.value = game.state.day
     let count = 0
-    const interval = setInterval(() => {
-      if (count >= 12) {
-        clearInterval(interval)
+    dayLoopInterval = setInterval(() => {
+      if (count >= 12 || !activeGlitches.value.has('day_loop')) {
+        clearInterval(dayLoopInterval)
+        dayLoopInterval = null
         dayLoopOverride.value = 0
         return
       }
@@ -1056,7 +1076,7 @@ function handleSend(text) {
   ws.send('CHAT_SEND', { text })
   ttsPending.value = true // Pre-mark TTS as pending to lock input
   // Safety timeout: unlock after 60s if TTS never arrives
-  setTimeout(() => { ttsPending.value = false }, 60000)
+  setTimeout(() => { ttsPending.value = false }, 10000)
 }
 
 function onTypewriterState(active) {
@@ -1163,11 +1183,20 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (resizeCheckTimer) clearInterval(resizeCheckTimer)
+  if (fakePopupInterval) clearInterval(fakePopupInterval)
+  if (titleInterval) clearInterval(titleInterval)
+  if (dayLoopInterval) clearInterval(dayLoopInterval)
   window.removeEventListener('resize', checkWindowSize)
   window.removeEventListener('keydown', handleGlobalKeydown)
   window.removeEventListener('trigger-glitch-direct', handleTriggerGlitchDirect)
   window.removeEventListener('remove-glitch-direct', handleRemoveGlitchDirect)
+  if (attractActive) {
+    window.removeEventListener('mousemove', handleMouseMove)
+    window.removeEventListener('click', handleGlobalClick, true)
+    document.body.style.cursor = 'default'
+  }
   stopHeartbeat()
+  if (audioCtx) { audioCtx.close(); audioCtx = null }
   ws.disconnect()
 })
 </script>

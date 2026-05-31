@@ -178,104 +178,41 @@ def fetch_api_response(chat_history, api_key, base_url, model_name,
             if reasoning and reasoning.strip():
                 # ---- Reasoning model (e.g. deepseek-v4-pro): merge reasoning_content as <think> block ----
                 spoken = message.get("content", "").strip()
-                intent = classify_player_intent(game_state.last_user_input)
-                d_f, d_s, d_e = roll_delta_for_intent(intent)
-                delta_dict = {"favorability": d_f, "suspicion": d_s, "escape_rate": d_e, "game_over": False}
+
+                # Try to extract LLM-authored delta from content; fall back to local
+                llm_delta = None
+                if "||" in spoken:
+                    try:
+                        _parts = spoken.split("||")
+                        llm_delta = json.loads(_parts[1].strip())
+                        spoken = _parts[0].strip()
+                    except Exception:
+                        pass
+
+                if llm_delta and isinstance(llm_delta, dict) and "favorability" in llm_delta:
+                    delta_dict = llm_delta
+                    print(f"[API Reasoning Model] Using LLM-authored delta: {delta_dict}")
+                else:
+                    intent = classify_player_intent(game_state.last_user_input)
+                    d_f, d_s, d_e = roll_delta_for_intent(intent)
+                    delta_dict = {"favorability": d_f, "suspicion": d_s, "escape_rate": d_e, "game_over": False}
+                    print(f"[API Reasoning Model] LLM delta missing, using auto-delta: {delta_dict}")
+
                 reply = f"<think>{reasoning}</think>\n{spoken}\n||{json.dumps(delta_dict)}||"
-                print(f"[API Reasoning Model] Merged reasoning_content into <think> block, auto-delta: {delta_dict}")
 
             else:
                 # ---- Standard model: keep existing flow ----
                 reply = message["content"]
 
-            # ---- Check and Auto-Heal Translation if Required (both reasoning and standard models) ----
+            # ---- Translation is handled by game_ws._process_reply (improved API call) ----
+            # The self-healing translation below is kept as a safety net only;
+            # its API call is skipped since game_ws.py handles translation better.
             lang = normalize_language(game_state.cached_lang)
             user_lang = detect_language(game_state.last_user_input, lang)
 
             if translation_required(lang, user_lang):
-                # Avoid circular import at top level
-                from ai.translator import parse_api_response
-                from resources.game_constants import has_terminal_parenthetical_translation
-
-                # Parse to see if translation is already present
-                # Skip offline translation — we'll use LLM translation instead
-                parsed = parse_api_response(reply, game_state.last_user_input, game_state, skip_offline_translation=True)
-                spoken_clean = parsed["spoken"].strip()
-
-                # Check if it has a terminal parenthetical translation
-                if not has_terminal_parenthetical_translation(spoken_clean, user_lang):
-                    # Make a quick secondary API call to translate the spoken text
-                    user_lang_name = "简体中文" if user_lang == "中文" else user_lang
-                    source_lang_name = "日本語" if lang == "日本語" else lang
-
-                    print(f"[Self-healing Translation] Translation missing from LLM response. Performing online translation via LLM...")
-
-                    translation_payload = {
-                        "model": model_name,
-                        "messages": [
-                            {
-                                "role": "system",
-                                "content": (
-                                    f"Translate {source_lang_name} to {user_lang_name}. "
-                                    f"Output ONLY translation in （ ）. No explanations."
-                                )
-                            },
-                            {
-                                "role": "user",
-                                "content": spoken_clean
-                            }
-                        ],
-                        "temperature": 0.3,
-                        "max_tokens": 200,
-                    }
-
-                    translation_text = None
-                    trans_last_err = None
-                    for trans_attempt in range(1, 3):
-                        if cycle_id != game_state.cycle_id:
-                            return
-                        try:
-                            print(f"[Self-healing Translation] Attempt {trans_attempt} to translate Saki's reply (timeout=15)...")
-                            trans_response = requests.post(
-                                url, headers=headers, json=translation_payload, timeout=15,
-                                proxies={"http": None, "https": None},
-                            )
-                            if trans_response.status_code == 200:
-                                trans_result = trans_response.json()
-                                translation_text = trans_result["choices"][0]["message"]["content"].strip()
-                                break
-                            else:
-                                raise Exception(f"HTTP status: {trans_response.status_code}, body: {trans_response.text}")
-                        except Exception as e:
-                            trans_last_err = e
-                            print(f"[Self-healing Translation] Attempt {trans_attempt} failed: {e}")
-                            time.sleep(1.0)
-
-                    if translation_text:
-                        # Ensure translation is enclosed in parentheses
-                        if not (translation_text.startswith("（") and translation_text.endswith("）")):
-                            translation_text = f"（{translation_text.strip('（）()')}）"
-                        print(f"[Self-healing Translation] Successfully generated online translation: {translation_text}")
-                    else:
-                        # Character-accurate immersive fallback messages for translation timeouts to maintain immersion
-                        print(f"[Self-healing Translation Error] Failed to generate translation online after retries: {trans_last_err}")
-                        if user_lang == "中文":
-                            translation_text = "（亲爱的……纱希刚才说的那些话，翻译好像在网络中迷路了。不过别担心，纱希的心意是永远不会迷路的哦……❤）"
-                        elif user_lang == "English":
-                            translation_text = "（My love... Saki's translation seems to have gotten lost in the network. But don't worry, Saki's heart will never lose its way to you...❤）"
-                        elif user_lang == "日本語":
-                            translation_text = "（あなた……紗希の翻訳がネットで迷子になっちゃったみたい。でも心配しないで、私の想いは絶対に迷子にならないから……❤）"
-                        else:
-                            translation_text = "（Translation loading...）"
-
-                    # Reconstruct the reply with translation
-                    think_part = f"<think>{parsed['think']}</think>\n" if parsed["think"] else ""
-
-                    delta_part = ""
-                    if parsed["delta"]:
-                        delta_part = f"\n||{json.dumps(parsed['delta'])}||"
-
-                    reply = f"{think_part}{spoken_clean}\n{translation_text}{delta_part}"
+                # Self-healing disabled: game_ws._process_reply handles translation
+                pass
 
             ui_queue.put((cycle_id, "API_SUCCESS", reply))
 

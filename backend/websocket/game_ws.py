@@ -219,48 +219,96 @@ class GameSession:
 
         parsed = parse_api_response(reply, user_input, self.state)
 
-        # Stream think block
+        # Stream think block — clean AI meta-commentary only, no translation
         think = parsed.get("think", "")
         if think:
+            think = _strip_think_meta(think)
             await self._safe_send(envelope_server("THINK_CHUNK", text=think))
 
-        # Get spoken text — use parsed version (monologue stripped)
-        spoken = parsed.get("spoken", "")
-        clean_spoken = spoken
         user_lang = detect_language(user_input, self.state.cached_lang)
 
-        # Force translation via API — never rely on LLM's inline translation
+        # Get spoken text — use parsed version (monologue stripped).
+        # Fall back to raw reply if parsed spoken is empty (reasoning model edge case).
+        spoken = parsed.get("spoken", "") or ""
+        clean_spoken = spoken
+        if not clean_spoken:
+            clean_spoken = re.sub(r'<think>.*?</think>', '', reply, flags=re.S).strip()
+            clean_spoken = re.sub(r'\|\|.*?\|\|', '', clean_spoken).strip()
+            spoken = clean_spoken
+
+        # Translation is always done by backend API for consistent quality.
+        # The LLM outputs only in the game language, no inline translations.
         translation = ""
 
         if spoken:
             await self._safe_send(envelope_server("SPEECH_CHUNK", text=clean_spoken))
 
-            # Fallback: fetch translation via API if LLM didn't provide one
-            if not translation and self.config.get("api_key"):
+            if not self.config.get("api_key"):
+                print("[Translate] SKIP: no api_key in config")
+            else:
                 saki_lang = self.state.cached_lang
-                if user_lang and user_lang != saki_lang:
-                    import requests as req
+                if not user_lang or user_lang == saki_lang:
+                    print(f"[Translate] SKIP: same language (saki={saki_lang}, user={user_lang})")
+                else:
+                    print(f"[Translate] START: {saki_lang} -> {user_lang}")
                     try:
                         api_key = self.config["api_key"]
                         api_base = self.config.get("api_base", "https://api.deepseek.com")
-                        model_name = self.config.get("model_name", "deepseek-v4-flash")
-                        url = f"{api_base.rstrip('/')}/chat/completions"
-                        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-                        payload = {
-                            "model": model_name,
-                            "messages": [
-                                {"role": "system", "content": f"Translate to {user_lang}. Output ONLY translation in （ ）."},
-                                {"role": "user", "content": clean_spoken[:300]}
-                            ],
-                            "temperature": 0.3, "max_tokens": 150,
-                        }
-                        resp = req.post(url, headers=headers, json=payload, timeout=10, proxies={"http": None, "https": None})
+                        main_model = self.config.get("model_name", "deepseek-v4-flash")
+                        # Translation MUST use a non-reasoning model.
+                        # Reasoning models (deepseek-v4-pro, o1, o3) return empty content.
+                        if "deepseek" in api_base.lower():
+                            trans_model = "deepseek-chat"
+                        elif "openai" in api_base.lower():
+                            trans_model = "gpt-4o-mini"
+                        else:
+                            trans_model = main_model.replace("pro", "flash").replace("reasoner", "chat")
+
+                        lang_names = {"中文": "Simplified Chinese", "English": "English", "日本語": "Japanese"}
+                        src_name = lang_names.get(saki_lang, saki_lang)
+                        tgt_name = lang_names.get(user_lang, user_lang)
+
+                        def _do_translate():
+                            import requests as _req
+                            _url = f"{api_base.rstrip('/')}/chat/completions"
+                            _headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                            _payload = {
+                                "model": trans_model,
+                                "messages": [
+                                    {"role": "system", "content": (
+                                        f"You are a translator. Translate the {src_name} text below "
+                                        f"into {tgt_name} WORD FOR WORD. This is a TRANSLATION task, "
+                                        f"NOT creative writing. Keep the same sentence structure, "
+                                        f"action descriptions in （ ）, and first-person voice. "
+                                        f"Do NOT add, remove, or change anything. "
+                                        f"Do NOT write third-person narration. "
+                                        f"Wrap the entire translation in （ ）. Output NOTHING else."
+                                    )},
+                                    {"role": "user", "content": clean_spoken[:600]}
+                                ],
+                                "temperature": 0.1, "max_tokens": 500,
+                            }
+                            return _req.post(_url, headers=_headers, json=_payload, timeout=15,
+                                           proxies={"http": None, "https": None})
+
+                        loop = asyncio.get_running_loop()
+                        resp = await loop.run_in_executor(None, _do_translate)
                         if resp.status_code == 200:
-                            raw = resp.json()["choices"][0]["message"]["content"].strip()
-                            raw = re.sub(r'^[（\(]\s*(日语|中文|English|Japanese|Chinese|日本語)\s*[）\)]', '', raw).strip()
-                            c = raw.strip('（） ()')
-                            if len(c) >= 2:
-                                translation = raw if (raw.startswith("（") and raw.endswith("）")) else f"（{c}）"
+                            body = resp.json()
+                            msg = body["choices"][0]["message"]
+                            raw = (msg.get("content") or "").strip()
+                            reasoning = (msg.get("reasoning_content") or "").strip()
+                            print(f"[Translate] model={trans_model} content_len={len(raw)} reasoning_len={len(reasoning)}")
+                            if raw:
+                                raw = re.sub(r'^[（\(]\s*(日语|中文|English|Japanese|Chinese|日本語|Simplified Chinese)\s*[）\)]\s*', '', raw).strip()
+                                inner = raw.strip('（）() \t')
+                                if len(inner) >= 2:
+                                    translation = f"（{inner}）"
+                                    print(f"[Translate] OK: {translation[:80]}")
+                                else:
+                                    print(f"[Translate] FAIL: inner too short ({len(inner)} chars)")
+                            else:
+                                print(f"[Translate] FAIL: empty content (reasoning present: {bool(reasoning)})")
                     except Exception as e:
                         print(f"[Translation Error] {e}")
 
@@ -488,7 +536,7 @@ class GameSession:
                      "tts_base", "refer_wav_path", "prompt_text",
                      "gpt_weights_path", "sovits_weights_path",
                      "selected_language"):
-            if key in payload:
+            if key in payload and payload[key]:
                 self.config[key] = payload[key]
         save_config(self.config)
         if "selected_language" in payload:
@@ -686,15 +734,9 @@ class GameSession:
         await self._safe_send(envelope_server("THINK_CHUNK", text=think))
         await self._safe_send(envelope_server("SPEECH_CHUNK", text=spoken))
 
-        # Send hardcoded greeting translation
-        greeting_translation = ""
-        translations = GREETING_TRANSLATIONS.get(lang, {})
-        for t_lang, t_text in translations.items():
-            if t_lang != lang:
-                greeting_translation = t_text
-                break
-        if greeting_translation:
-            await self._safe_send(envelope_server("TRANSLATION_CHUNK", text=greeting_translation))
+        # Do NOT send translation for opening greeting — the player chose this
+        # language at the launcher, so they are assumed to understand it.
+        # Translation will kick in only when the player replies in a different language.
 
         # Apply small initial delta
         self.state.favorability = min(100, self.state.favorability + 5)
@@ -707,14 +749,14 @@ class GameSession:
             escape_rate=self.state.escape_rate,
         ))
 
-        # Add to chat history (include translation in CHAT_APPEND)
+        # Add to chat history (no translation for opening — player chose this language)
         full_reply = f"<think>{think}</think>\n{spoken}"
         self.chat_history.append({"role": "assistant", "content": full_reply})
         await self._safe_send(envelope_server("CHAT_APPEND",
             role="assistant",
             content=spoken,
             think=think,
-            translation=greeting_translation,
+            translation="",
         ))
 
         # Trigger TTS after a delay so the typewriter can finish the think block first
@@ -866,6 +908,50 @@ class GameSession:
         except Exception:
             self.alive = False
 
+    async def _translate_and_send_think(self, think: str, src_lang: str, tgt_lang: str):
+        """Translate think block to player's language and send as THINK_CHUNK."""
+        if not self.config.get("api_key"):
+            return
+        try:
+            lang_names = {"中文": "Simplified Chinese", "English": "English", "日本語": "Japanese"}
+            src_name = lang_names.get(src_lang, src_lang)
+            tgt_name = lang_names.get(tgt_lang, tgt_lang)
+            api_key = self.config["api_key"]
+            api_base = self.config.get("api_base", "https://api.deepseek.com")
+
+            def _do_trans():
+                import requests as _req
+                # Use a fast model for think translation. Prefer flash/mini variants
+                # if on DeepSeek, otherwise fall back to the configured model.
+                main_model = self.config.get("model_name", "gpt-4o-mini")
+                if "deepseek" in api_base.lower():
+                    trans_model = "deepseek-chat"
+                elif "openai" in api_base.lower():
+                    trans_model = "gpt-4o-mini"
+                else:
+                    trans_model = main_model
+                return _req.post(
+                    f"{api_base.rstrip('/')}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": trans_model,
+                        "messages": [
+                            {"role": "system", "content": f"Translate this inner monologue from {src_name} to {tgt_name}. Keep the emotional tone and fragmented style. Output ONLY the translation, no explanations."},
+                            {"role": "user", "content": think[:400]}
+                        ],
+                        "temperature": 0.0, "max_tokens": 300,
+                    },
+                    timeout=10, proxies={"http": None, "https": None})
+
+            loop = asyncio.get_running_loop()
+            resp = await loop.run_in_executor(None, _do_trans)
+            if resp.status_code == 200:
+                translated = resp.json()["choices"][0]["message"]["content"].strip()
+                if translated:
+                    await self._safe_send(envelope_server("THINK_CHUNK", text=translated))
+        except Exception:
+            pass  # think translation is best-effort
+
     async def _push_state_sync(self):
         import getpass
         try:
@@ -938,3 +1024,30 @@ class GameSession:
                 path=selected_path,
                 field=field,
             ))
+
+
+# ── Think block cleaning ─────────────────────────────────────────────
+
+def _strip_think_meta(text: str) -> str:
+    """Remove AI meta-commentary patterns from think block text."""
+    if not text:
+        return text
+    # Strip leading role-play setup paragraphs (中文/English/日本語)
+    text = re.sub(
+        r'^(?:好的|OK|さて)\s*[，,]\s*'
+        r'(?:现在我是|now I am|私は)'
+        r'[^。．.!！?\n]+'
+        r'[。．.!！?]?\s*',
+        '', text, flags=re.I
+    )
+    # Strip "好了我得回应他了" / "好了那么现在开始回应吧" endings
+    text = re.sub(
+        r'\s*(?:好了|OK|さて)\s*[，,]?\s*'
+        r'(?:那么现在就|我得|我该|I should|I need to)'
+        r'[^。．.!！?\n]*'
+        r'[。．.!！?]?\s*$',
+        '', text, flags=re.I
+    )
+    # Clean up leading debris (dots, commas, whitespace)
+    text = re.sub(r'^[.．…、，,\s]+', '', text)
+    return text.strip() or ""

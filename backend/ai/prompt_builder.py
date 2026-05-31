@@ -60,9 +60,10 @@ def get_system_prompt(game_state):
 
     # Check if it's a custom character from custom_characters.json
     custom_chars = {}
-    if os.path.exists("custom_characters.json"):
+    chars_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "custom_characters.json")
+    if os.path.exists(chars_path):
         try:
-            with open("custom_characters.json", "r", encoding="utf-8") as f:
+            with open(chars_path, "r", encoding="utf-8") as f:
                 custom_chars = json.load(f)
         except Exception:
             pass
