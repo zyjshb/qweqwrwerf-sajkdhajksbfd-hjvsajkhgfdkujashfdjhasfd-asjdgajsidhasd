@@ -12,38 +12,13 @@ from resources.game_constants import (
     normalize_language,
     detect_language,
     ensure_readability_translation,
+    extract_terminal_parenthetical_translation,
+    strip_terminal_parenthetical_translation,
 )
 
 
-def parse_api_response(raw_text, user_input, game_state):
-    """Parse a raw LLM reply into structured components.
-
-    Handles:
-    * Splitting the ``||{...}||`` JSON suffix from the spoken text.
-    * Regex fallback when the JSON block is malformed.
-    * Extracting the ``<think>...</think>`` inner monologue.
-    * Stripping residual ``||`` tokens from the spoken text.
-    * Running ``ensure_readability_translation`` for bilingual output.
-
-    Parameters
-    ----------
-    raw_text : str
-        The exact text returned by the LLM.
-    user_input : str
-        The player's last message (used for language detection and
-        translation heuristics).
-    game_state : core.game_state.GameState
-        Provides ``cached_lang`` for the current interface language.
-
-    Returns
-    -------
-    dict
-        Keys:
-        - ``"think"`` : str  -- extracted inner monologue (may be empty).
-        - ``"spoken"`` : str -- cleaned, translation-adjusted dialogue.
-        - ``"delta"`` : dict or None -- raw JSON delta payload before
-          normalization.
-    """
+def parse_api_response(raw_text, user_input, game_state, skip_offline_translation=False):
+    """Parse a raw LLM reply into structured components."""
     raw_delta = None
     spoken_text = raw_text
 
@@ -85,19 +60,58 @@ def parse_api_response(raw_text, user_input, game_state):
                 spoken_text[:start_idx] + " " + spoken_text[end_idx + 8:]
             )
         else:
-            # Unclosed <think> -- take everything after it
             think_content = spoken_text[start_idx + 7:].strip()
             spoken_text = spoken_text[:start_idx]
 
-    # ---- 5. Apply readability translation (bilingual output) ----
+    # ---- 5. Strip inner monologue leaked into spoken text ----
+    spoken_text = _strip_monologue_from_spoken(spoken_text)
+
+    # ---- 6. Extract translation if present at the end ----
     selected_lang = normalize_language(game_state.cached_lang)
     user_lang = detect_language(user_input, selected_lang)
-    spoken_text = ensure_readability_translation(
-        spoken_text, selected_lang, user_lang, user_input,
-    )
+    translation = extract_terminal_parenthetical_translation(spoken_text, user_lang)
+    if translation:
+        spoken_text = strip_terminal_parenthetical_translation(spoken_text, user_lang)
 
     return {
         "think": think_content,
         "spoken": spoken_text,
         "delta": raw_delta,
+        "translation": translation,
     }
+
+
+def _strip_monologue_from_spoken(text):
+    """Remove inner monologue that leaked into the spoken text."""
+    if not text:
+        return text
+
+    # Strip bare monologue before first action description
+    first_action = re.search(r'[（\(][^\)）\（\(]{1,40}[）\)]', text)
+    if first_action and first_action.start() > 5:
+        text = text[first_action.start():]
+
+    # Remove long parenthetical monologue blocks (>40 chars)
+    result = []
+    i = 0
+    while i < len(text):
+        if text[i] in ('(', '（'):
+            open_char = text[i]
+            close_char = ')' if open_char == '(' else '）'
+            depth = 1
+            j = i + 1
+            while j < len(text) and depth > 0:
+                if text[j] == open_char:
+                    depth += 1
+                elif text[j] == close_char:
+                    depth -= 1
+                j += 1
+            block_content = text[i + 1:j - 1].strip()
+            if len(block_content) <= 40:
+                result.append(text[i:j])
+            i = j
+        else:
+            result.append(text[i])
+            i += 1
+
+    return ''.join(result).strip()

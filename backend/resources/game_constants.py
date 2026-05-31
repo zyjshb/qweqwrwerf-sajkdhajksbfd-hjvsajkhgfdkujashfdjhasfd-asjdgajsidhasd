@@ -1126,7 +1126,7 @@ def clean_text_for_tts(text):
 
         old_text = text
 
-        text = re.sub(r"[\(（][^\(\)（）]*[\)）]", "", text)
+        text = re.sub(r"（[^（）]*）", "", text)
 
         text = re.sub(r"[\[【][^\[\]【】]*[\]】]", "", text)
 
@@ -1134,7 +1134,7 @@ def clean_text_for_tts(text):
 
         text = re.sub(r'\*[^*]*\*', '', text)
 
-    text = re.sub(r'[^\w\s一-龥，。！？、…；：“”‘’\-]', '', text)
+    text = re.sub(r'[^\w\s一-龥，。！？、…；：""''（）\(\)\-]', '', text)
 
     if not re.search(r"[一-龥぀-ゟ゠-ヿa-zA-Z0-9]", text):
 

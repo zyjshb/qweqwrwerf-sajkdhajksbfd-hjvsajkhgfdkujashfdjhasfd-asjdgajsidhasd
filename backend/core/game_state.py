@@ -179,8 +179,10 @@ def build_role_simulation_prompt(selected_lang, user_lang, current_day, favorabi
             f"- 二ヶ国語出力契約: {translation_contract}\n"
             f"- 返答長さ制限: {profile['reply_limit']}\n\n"
             "【出力の構造とルール】\n"
-            "1. 出力には必ず `<think>...</think>` を1つだけ含めてください。内部には紗希の心理分析や次の行動の動機を日本語で書いてください。\n"
+            "1. 出力には必ず `<think>...</think>` を1つだけ含めてください。内部には紗希の本音や感情を、人間が心の中で独り言を呟くように書いてください。\n"
+            "   【厳禁】think に数値分析（好感度、疑心度など）、戦略説明（優しく接しよう...）、ゲーム用語（初日、delta）、三人称分析（プレイヤーが...）を絶対に書かないでください。think は紗希の本能的な反応と感情です。AI分析レポートではありません。\n"
             "2. `<think>` の直後に、プレイヤーに向けて話す【台詞】を日本語で出力してください（動作描写も含めて良いですが、日本語である必要があります）。\n"
+            "   【厳禁】台詞の中に紗希の内心独白や心理分析を絶対に含めないでください！内心の考えは `<think>` にのみ書くこと。台詞には会話・動作描写（例：（頬を赤らめる）、（近づく））・感情表現（例：泣く、微笑む）だけを含めてください。「紗希は今すごく戸惑っている」「私は考えている」などの内面描写を台詞に入れないでください。\n"
             "3. 二ヶ国語出力契約が「はい」の場合、台詞の直後に改行し、プレイヤーの言語【" + user_lang_name + "】での正確な翻訳を、全角括弧 `（ ）` で囲んで1行で出力してください。内心独白は翻訳不要です。\n"
             "   【警告】絶対に『（紗希はあなたの優しい言葉を喜び、もう一度言ってほしいと思っています。）』などの三人称紹介文やナレーションを出力してはいけません！必ず紗希自身の視点でのセリフの【直接の翻訳】を出力してください。\n"
             "4. 末尾には、機械解析用の JSON データを厳密に以下の形式で追記してください（好感度/疑心度/脱出率の変化值 delta を整数で出力してください）：\n"
@@ -230,8 +232,10 @@ def build_role_simulation_prompt(selected_lang, user_lang, current_day, favorabi
             f"- Bilingual Output Contract: {translation_contract}\n"
             f"- Reply Limit: {profile['reply_limit']}\n\n"
             "【OUTPUT STRUCTURE & RULES】\n"
-            "1. You must include exactly one `<think>...</think>` block. Saki's psychological state and logic should be written in English here.\n"
+            "1. You must include exactly one `<think>...</think>` block. Write Saki's true inner thoughts here, as if she's talking to herself in her head.\n"
+            "   【FORBIDDEN】Do NOT include in think: stat analysis (favorability, suspicion, etc.), strategy descriptions (I should be gentle...), game terminology (day 1, delta), third-person analysis (The player...). Think is Saki's raw emotions and instinctive reactions, NOT an AI analysis report.\n"
             "2. Immediately after `</think>`, output Saki's spoken lines in English (including Saki's actions in brackets in English).\n"
+            "   【CRITICAL】The spoken lines must NEVER contain Saki's inner monologue or psychological analysis! Inner thoughts go ONLY in `<think>`. Spoken lines contain ONLY: dialogue, action descriptions (e.g. (blushes), (moves closer)), and emotional expressions (e.g. crying, smiling). Do NOT write things like 'Saki is feeling confused right now' or 'I am wondering' in the spoken part.\n"
             "3. If the Bilingual Contract is YES, write a one-line direct translation of Saki's spoken words in the player's language 【" + user_lang_name + "】 enclosed in full-width brackets `（ ）` right after the spoken text. Do not translate the `<think>` block.\n"
             "   【CRITICAL WARNING】Never output third-person narrations like '(Saki is happy and wants you to confirm...)'. You must provide a direct translation of Saki's words.\n"
             "4. Append a machine-parsable JSON block at the very end in this exact format (output the incremental delta change values as integers for favorability, suspicion, and escape_rate):\n"
@@ -281,8 +285,10 @@ def build_role_simulation_prompt(selected_lang, user_lang, current_day, favorabi
             f"- 双语显示合约: {translation_contract}\n"
             f"- 长度规则: {profile['reply_limit']}\n\n"
             "【输出结构】\n"
-            "1. 每次回复必须包含且只包含一个 `<think>...</think>`。think 内写纱希的内心判断，不要写模型推理过程。\n"
+            "1. 每次回复必须包含且只包含一个 `<think>...</think>`。think 内写纱希的真实内心想法，像一个人在心里自言自语。\n"
+            "   【严禁】think 里不准出现：数值分析（好感度、疑心度等）、策略描述（这里是优しく...）、游戏术语（初日、delta）、第三人称分析（プレイヤーが...）。think 应该是纱希的本能反应和情感，不是 AI 分析报告。\n"
             "2. `<think>` 之后写对玩家说出口的正式台词。台词要像角色在现场说话，不要像系统说明。\n"
+            "   【严禁】台词部分绝对不能出现纱希的内心独白或心理分析！内心想法只能写在 `<think>` 里。台词只包含：对话、动作描写（如（脸红）、（靠近你））、情感表达（如哭泣、微笑）。不要在台词里写「紗希は今戸惑っている」「我在想」之类的内心分析。\n"
             "3. 如果双语显示合约为\"是\"，正式台词后必须另起一行写一段括号译文，且只翻译正式台词和动作描写，不翻译 `<think>` 内容。\n"
             "4. 最末尾必须追加机器可解析 JSON，格式严格为（输出 favorability, suspicion, escape_rate 的每轮增量变化值 delta，使用整数）：\n"
             "   ||{\"favorability\": delta_int, \"suspicion\": delta_int, \"escape_rate\": delta_int, \"game_over\": false}||\n"
@@ -364,7 +370,7 @@ class GameState:
         ds = delta_data.get("suspicion", 0)
         de = delta_data.get("escape_rate", 0)
 
-        self.favorability = max(0, min(100, self.favorability + df))
+        self.favorability = max(-25, min(100, self.favorability + df))
         self.suspicion = max(0, min(100, self.suspicion + ds))
         self.escape_rate = max(0, min(100, self.escape_rate + de))
 

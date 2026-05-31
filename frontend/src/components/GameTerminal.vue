@@ -1,8 +1,8 @@
 <template>
-  <div class="flex-1 flex items-center justify-center p-4 bg-black/40">
-    <!-- Main Rigid Window Frame (1100x800px) -->
+  <div class="flex-1 flex items-center justify-center p-2 md:p-4 bg-black/40">
+    <!-- Main Window Frame (responsive, max 1100x800) -->
     <div
-      class="relative w-[1100px] h-[800px] bg-black border border-red-950/80 flex flex-col overflow-hidden select-none font-mono text-blood shadow-[0_0_50px_rgba(138,3,3,0.25)] rounded transition-all duration-700"
+      class="relative w-full max-w-[1100px] h-[85vh] max-h-[800px] bg-[var(--color-bg)] border border-red-950/80 flex flex-col overflow-hidden select-none font-mono text-blood shadow-[0_0_50px_rgba(138,3,3,0.25)] rounded transition-all duration-700"
       :class="{ 'mita-screen-tilt': props.suspicion >= 55 }"
     >
       <!-- Saki Avatar / Sprite on Left Side (Only when sprite image is loaded) -->
@@ -17,10 +17,10 @@
       </div>
 
       <!-- ── Layer 1: Title Bar ── -->
-      <div class="h-8 border-b border-red-950 flex items-center justify-between px-4 bg-[#050000] shrink-0 z-20">
-        <div class="text-[12px] text-blood-dim flex items-center gap-2 select-none">
+      <div class="h-10 border-b border-red-950 flex items-center justify-between px-4 bg-[#050000] shrink-0 z-20">
+        <div class="text-[12px] text-[var(--color-text-dim)] flex items-center gap-2 select-none">
           <span>{{ t.title }}</span>
-          <span class="text-green-700 font-bold" v-if="wsConnected">[ONLINE]</span>
+          <span class="text-green-500 font-bold" v-if="wsConnected">[ONLINE]</span>
           <span class="text-red-900/60 font-bold" v-else>[OFFLINE]</span>
         </div>
         <div class="flex items-center gap-3 text-[12px]">
@@ -258,41 +258,41 @@
         <div
           v-for="(msg, idx) in messages"
           :key="idx"
-          class="mb-4 leading-relaxed block font-mono text-[16px]"
+          class="mb-4 leading-relaxed text-[14px]"
         >
-          <!-- System messages (Darker grey but readable, 14px) -->
-          <div v-if="msg.role === 'system'" class="text-zinc-500 block font-mono text-[14px] leading-relaxed">
+          <!-- System messages -->
+          <div v-if="msg.role === 'system'" class="text-zinc-500 text-[13px] leading-relaxed">
             {{ msg.content }}
           </div>
 
-          <!-- Agent commentary (Lilac purple, 14px) -->
-          <div v-else-if="msg.role === 'agent'" class="text-purple-400 italic block font-mono text-[14px] leading-relaxed">
+          <!-- Agent commentary -->
+          <div v-else-if="msg.role === 'agent'" class="text-purple-400 italic text-[13px] leading-relaxed">
             {{ msg.content }}
           </div>
 
-          <!-- User dialogue (Vibrant Orange/Yellow prefix, bold, 18px) -->
-          <div v-else-if="msg.role === 'user'" class="flex gap-1 text-[#f97316] font-bold block font-mono text-[18px] leading-relaxed">
-            <span class="font-mono">{{ getUserPrefix }}</span>
-            <span class="font-mono">{{ msg.content }}</span>
+          <!-- User dialogue -->
+          <div v-else-if="msg.role === 'user'" class="flex gap-2 text-[#f97316] font-bold text-[15px] leading-relaxed bg-[#1a0800] border-l-2 border-orange-700 px-3 py-2 rounded">
+            <span>{{ getUserPrefix }}</span>
+            <span>{{ msg.content }}</span>
           </div>
 
           <!-- Assistant (Saki) Response -->
-          <div v-else-if="msg.role === 'assistant'" class="flex flex-col gap-1.5 block font-mono">
-            <!-- Think inner thoughts (Aggressive Deep Red Synapse log, 17px) -->
+          <div v-else-if="msg.role === 'assistant'" class="flex flex-col gap-2">
+            <!-- Think inner thoughts -->
             <div
               v-if="msg.think"
-              class="p-4 mb-3 border border-red-950 bg-[#080101] block font-mono leading-relaxed text-[17px] rounded"
-              style="color: #fda4af; text-shadow: 0 0 6px rgba(253, 164, 175, 0.4); border-left: 4px solid #ef4444;"
+              class="p-3 mb-2 border border-red-950 bg-[#120404] leading-relaxed text-[13px] rounded italic"
+              style="color: #fda4af; border-left: 4px solid #ef4444;"
             >
-              <div class="text-[12px] text-red-500/60 uppercase font-bold tracking-widest mb-1 select-none">[ 纱希的神经意识独白 / COGNITIVE ANALYSIS ]</div>
+              <div class="text-[11px] text-red-500/60 uppercase font-bold tracking-wider mb-1 select-none">[ COGNITIVE ANALYSIS ]</div>
               <div>（{{ msg.think }}）</div>
             </div>
-            <!-- Verbal speech (Vibrant Red or character custom styling, 19px) -->
+            <!-- Verbal speech -->
             <div
               v-if="msg.content"
-              class="block font-mono leading-relaxed text-[19px] font-medium"
+              class="leading-relaxed text-[16px] font-medium"
               :style="{ color: getCharacterColor }"
-              :class="{ 
+              :class="{
                 'animate-glitch-text': activeGlitches.has('font_shake'),
                 'mita-chromatic-text': props.suspicion >= 55
               }"
@@ -303,36 +303,36 @@
               </span>
               <span v-else v-html="formatAssistantSpeech(msg.content)"></span>
             </div>
-            <!-- Translation display -->
+            <!-- Translation display (only if different from content) -->
             <div
-              v-if="msg.translation"
-              class="block font-mono leading-relaxed text-[19px] font-semibold mt-2 border-t border-red-950/40 pt-2"
-              style="color: #ff2222; text-shadow: 0 0 10px rgba(255, 0, 0, 0.7), 0 0 20px rgba(255, 0, 0, 0.4);"
+              v-if="msg.translation && msg.translation !== msg.content"
+              class="leading-relaxed text-[14px] mt-1 border-t border-red-900/40 pt-2"
+              style="color: var(--color-text-translation);"
               :class="{ 'mita-chromatic-text': props.suspicion >= 55 }"
             >
-              （{{ msg.translation }}）
+              {{ msg.translation }}
             </div>
           </div>
         </div>
 
-        <!-- Streaming Typewriter Frame (Upgraded Spec-v6 Sequential Queue Typewriter) -->
-        <div v-if="typewriterDisplayThink || typewriterDisplaySpeech || translationTypewriterDisplay" class="mb-4 block font-mono">
+        <!-- Streaming Typewriter Frame -->
+        <div v-if="typewriterDisplayThink || typewriterDisplaySpeech || translationTypewriterDisplay" class="mb-4">
           <!-- Lavender Thoughts -->
           <div
             v-if="typewriterDisplayThink"
-            class="p-4 mb-3 border border-red-950 bg-[#080101] block font-mono leading-relaxed text-[17px] rounded"
-            style="color: #fda4af; text-shadow: 0 0 6px rgba(253, 164, 175, 0.4); border-left: 4px solid #ef4444;"
+            class="p-3 mb-2 border border-red-950 bg-[#120404] leading-relaxed text-[13px] rounded italic"
+            style="color: #fda4af; border-left: 4px solid #ef4444;"
           >
-            <div class="text-[12px] text-red-500/60 uppercase font-bold tracking-widest mb-1 select-none">[ 纱希的神经意识独白 / COGNITIVE ANALYSIS ]</div>
+            <div class="text-[11px] text-red-500/60 uppercase font-bold tracking-wider mb-1 select-none">[ COGNITIVE ANALYSIS ]</div>
             <span>（{{ typewriterDisplayThink }}</span>
-            <span v-if="typewriterMode === 'think'" class="retro-caret font-mono">█</span>
+            <span v-if="typewriterMode === 'think'" class="retro-caret">█</span>
             <span>）</span>
           </div>
 
           <!-- Neon Red Speech -->
           <div
             v-if="typewriterDisplaySpeech"
-            class="block font-mono leading-relaxed text-[19px] font-medium"
+            class="leading-relaxed text-[16px] font-medium"
             :style="{ color: getCharacterColor }"
             :class="{ 'mita-chromatic-text': props.suspicion >= 55 }"
           >
@@ -351,39 +351,38 @@
           <!-- Translation -->
           <div
             v-if="translationTypewriterDisplay"
-            class="block font-mono leading-relaxed text-[19px] font-semibold mt-2 border-t border-red-950/40 pt-2"
-            style="color: #ff2222; text-shadow: 0 0 10px rgba(255, 0, 0, 0.7), 0 0 20px rgba(255, 0, 0, 0.4);"
+            class="leading-relaxed text-[14px] mt-1 border-t border-red-900/40 pt-2"
+            style="color: var(--color-text-translation);"
             :class="{ 'mita-chromatic-text': props.suspicion >= 55 }"
           >
-            <span>（{{ translationTypewriterDisplay }}</span>
-            <span v-if="typewriterMode === 'translation'" class="retro-caret font-mono">█</span>
-            <span>）</span>
+            <span>{{ translationTypewriterDisplay }}</span>
+            <span v-if="typewriterMode === 'translation'" class="retro-caret">█</span>
           </div>
         </div>
       </div>
 
       <!-- ── Layer 6: Bottom Input Area ── -->
-      <div class="h-12 border-t border-red-950 bg-[#040000] flex items-center px-4 gap-3 shrink-0 z-20">
-        <span class="text-red-900 shrink-0 font-mono text-sm font-bold select-none">&gt;</span>
+      <div class="h-14 border-t border-red-950 bg-[#040000] flex items-center px-4 gap-3 shrink-0 z-20">
+        <span class="text-red-700 shrink-0 text-sm font-bold select-none">&gt;</span>
         <input
           ref="inputRef"
           v-model="inputText"
           type="text"
           :placeholder="getInputPlaceholder"
           :disabled="disabled || hijackActive"
-          class="flex-1 bg-transparent border border-red-950/50 px-3 py-1 outline-none text-red-500 placeholder-red-950/30 text-base font-mono focus:border-red-700 focus:shadow-[0_0_10px_rgba(239,68,68,0.15)] rounded transition-all"
+          class="flex-1 bg-transparent border border-red-950/50 px-3 py-2 outline-none text-red-500 placeholder-red-800/50 text-[15px] focus:border-red-700 focus:shadow-[0_0_10px_rgba(239,68,68,0.15)] rounded transition-all disabled:opacity-30 disabled:cursor-not-allowed"
           @keydown="handleKeydown"
           autofocus
         />
         <button
           @click="doSend"
           :disabled="disabled"
-          class="px-5 py-1.5 border font-bold text-sm cursor-pointer select-none transition-all rounded font-mono mita-interactive-ui"
-          :class="props.hijackActive 
+          class="px-5 py-2 border font-bold text-[14px] cursor-pointer select-none transition-all duration-300 rounded mita-interactive-ui"
+          :class="props.hijackActive
             ? 'border-red-500 text-red-500 bg-red-950/20 animate-pulse-red shadow-[0_0_15px_rgba(239,68,68,0.4)]'
             : 'border-red-900 bg-black text-red-500 disabled:opacity-20 disabled:cursor-not-allowed'"
         >
-          {{ props.hijackActive ? '看着我❤' : t.respond }}
+          {{ props.hijackActive ? '看着我' : t.respond }}
         </button>
       </div>
     </div>
@@ -417,6 +416,9 @@ const props = defineProps({
   savedConfig: { type: Object, default: () => ({}) },
   ecgSuspicion: { type: Number, default: 20 },
   ecgFavorability: { type: Number, default: 50 },
+  ttsPlaying: { type: Boolean, default: false },
+  typewriterActive: { type: Boolean, default: false },
+  inputLocked: { type: Boolean, default: false },
 })
 
 const emit = defineEmits([
@@ -427,6 +429,7 @@ const emit = defineEmits([
   'triggerGlitch',
   'removeGlitch',
   'typing-complete',
+  'typewriter-state',
 ])
 
 function injectSystemUsername(text) {
@@ -458,6 +461,7 @@ const LOCALIZATION = {
     inner_thought: '[内心] ',
     respond: '回应她',
     input_placeholder: '输入你想说的话...',
+    tts_playing: '紗希正在说话，请稍候...',
     game_over: '游戏结束...',
     user_prefix: '你: ',
     saki_prefix: '纱希: ',
@@ -479,6 +483,7 @@ const LOCALIZATION = {
     inner_thought: '[Thought] ',
     respond: 'Respond',
     input_placeholder: 'Type your message...',
+    tts_playing: 'Saki is speaking...',
     game_over: 'Game Over...',
     user_prefix: 'You: ',
     saki_prefix: 'Saki: ',
@@ -500,6 +505,7 @@ const LOCALIZATION = {
     inner_thought: '[内心] ',
     respond: '彼女に応える',
     input_placeholder: '言葉を入力してください...',
+    tts_playing: '紗希が話中...',
     game_over: 'ゲームオーバー...',
     user_prefix: 'あなた: ',
     saki_prefix: '紗希: ',
@@ -532,6 +538,7 @@ const getThinkSuffix = computed(() => {
 
 const getInputPlaceholder = computed(() => {
   if (props.gameOver) return t.value.game_over
+  if (props.typewriterActive || props.ttsPlaying) return t.value.tts_playing || '紗希正在说话...'
   if (props.hijackActive) return hijackText
   return t.value.input_placeholder
 })
@@ -564,7 +571,8 @@ watch(() => props.savedConfig, (conf) => {
     if (conf.api_base !== undefined) form.api_base = conf.api_base
     if (conf.model_name !== undefined) form.model_name = conf.model_name
     if (conf.selected_language !== undefined) form.selected_language = conf.selected_language
-    if (conf.gpt_sovits_url !== undefined) form.tts_base = conf.gpt_sovits_url
+    if (conf.tts_base !== undefined) form.tts_base = conf.tts_base
+    else if (conf.gpt_sovits_url !== undefined) form.tts_base = conf.gpt_sovits_url
     if (conf.refer_wav_path !== undefined) form.refer_wav_path = conf.refer_wav_path
     if (conf.prompt_text !== undefined) form.prompt_text = conf.prompt_text
     if (conf.gpt_weights_path !== undefined) form.gpt_weights_path = conf.gpt_weights_path
@@ -606,7 +614,7 @@ function isCarnageMessage(content) {
 const hijackText = '你走不掉的你走不掉的你走不掉的...'
 let hijackIndex = 0
 
-const disabled = computed(() => props.gameOver)
+const disabled = computed(() => props.gameOver || props.inputLocked)
 const inputPlaceholder = computed(() => {
   if (props.gameOver) return '游戏结束...'
   if (props.hijackActive) return hijackText
@@ -620,6 +628,9 @@ const translationTypewriterDisplay = ref('')
 const typewriterMode = ref('idle') // 'idle' | 'think' | 'speech' | 'translation'
 const speedMultiplier = ref(1.0)
 let typewriterInterval = null
+// Queuing flags: set when speech/translation arrives while think is still playing
+let speechQueued = false
+let translationQueued = false
 
 // ── speed_shift glitch: random typewriter speed modifier ──
 watch(() => props.activeGlitches.has('speed_shift'), (active) => {
@@ -669,11 +680,12 @@ function playTypewriterBeep(isGlitch = false) {
 // ── Spec-v6 Sequential Queue Typewriter Engine ──
 function startTypewriterSequence(think = '', speech = '', translation = '') {
   if (typewriterInterval) clearInterval(typewriterInterval)
-  
+
   typewriterDisplayThink.value = ''
   typewriterDisplaySpeech.value = ''
   translationTypewriterDisplay.value = ''
   typewriterMode.value = 'think'
+  emit('typewriter-state', true)
   
   let thinkIdx = 0
   let speechIdx = 0
@@ -683,13 +695,13 @@ function startTypewriterSequence(think = '', speech = '', translation = '') {
     clearInterval(typewriterInterval)
     typewriterInterval = null
     typewriterMode.value = 'idle'
-    
+    emit('typewriter-state', false)
+
+    // Emit typing-complete immediately; the messages.length watcher
+    // will clear the typewriter displays when the message is pushed to chatMessages
     setTimeout(() => {
-      typewriterDisplayThink.value = ''
-      typewriterDisplaySpeech.value = ''
-      translationTypewriterDisplay.value = ''
       emit('typing-complete')
-    }, 800)
+    }, 300)
   }
   
   const tick = () => {
@@ -700,7 +712,7 @@ function startTypewriterSequence(think = '', speech = '', translation = '') {
         thinkIdx++
         playTypewriterBeep(false)
         scrollToBottom()
-      } else if (props.speechText || speech) {
+      } else if (props.speechText || speech || speechQueued) {
         typewriterMode.value = 'speech'
       }
     }
@@ -726,7 +738,7 @@ function startTypewriterSequence(think = '', speech = '', translation = '') {
         playTypewriterBeep(false)
         scrollToBottom()
       } else {
-        if (props.translationText || translation) {
+        if (props.translationText || translation || translationQueued) {
           typewriterMode.value = 'translation'
         } else {
           finishSequence()
@@ -794,21 +806,31 @@ function triggerCarnageGlitches() {
 watch(() => props.thinkText, (newThink) => {
   if (newThink && typewriterMode.value === 'idle') {
     shaked = false
+    speechQueued = false
+    translationQueued = false
     startTypewriterSequence()
   }
-})
+}, { immediate: true })
 
 watch(() => props.speechText, (newSpeech) => {
-  if (newSpeech && typewriterMode.value === 'idle') {
+  if (!newSpeech) return
+  if (typewriterMode.value === 'idle') {
     shaked = false
     startTypewriterSequence()
+  } else if (typewriterMode.value === 'think') {
+    // Think is still playing — queue speech to start after think finishes
+    speechQueued = true
   }
 })
 
 watch(() => props.translationText, (newTrans) => {
-  if (newTrans && typewriterMode.value === 'idle') {
+  if (!newTrans) return
+  if (typewriterMode.value === 'idle') {
     shaked = false
     startTypewriterSequence()
+  } else if (typewriterMode.value === 'think' || typewriterMode.value === 'speech') {
+    // Think or speech is still playing — queue translation
+    translationQueued = true
   }
 })
 
@@ -820,16 +842,19 @@ function scrollToBottom() {
   })
 }
 
-// CRITICAL RESOLUTION: Prevent double text overlapping bug by clearing active typing state immediately
+// When messages change: only scroll if typewriter is running, don't interrupt it
 watch(() => props.messages.length, () => {
-  if (typewriterInterval) {
-    clearInterval(typewriterInterval)
-    typewriterInterval = null
+  if (typewriterMode.value !== 'idle') {
+    // Typewriter is running — just scroll, don't clear anything
+    scrollToBottom()
+    return
   }
+  // Typewriter is idle — safe to clear displays
   typewriterDisplayThink.value = ''
   typewriterDisplaySpeech.value = ''
   translationTypewriterDisplay.value = ''
-  typewriterMode.value = 'idle'
+  speechQueued = false
+  translationQueued = false
   scrollToBottom()
 })
 
@@ -1012,7 +1037,7 @@ function doSaveSettings() {
     api_key: form.api_key,
     api_base: form.api_base,
     model_name: form.model_name,
-    gpt_sovits_url: form.tts_base,
+    tts_base: form.tts_base,
     selected_language: form.selected_language,
     refer_wav_path: form.refer_wav_path,
     prompt_text: form.prompt_text,

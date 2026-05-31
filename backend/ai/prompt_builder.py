@@ -33,6 +33,27 @@ def get_system_prompt(game_state):
         escape_rate=game_state.escape_rate,
     )
 
+    # Force think block to use player's language (spoken stays in game language)
+    if user_lang and user_lang != selected_lang:
+        # Replace the think language rule directly in the prompt
+        lang_names = {"中文": "Simplified Chinese", "English": "English", "日本語": "Japanese"}
+        think_lang = lang_names.get(user_lang, user_lang)
+        # Override any existing think rule
+        base_prompt = base_prompt.replace(
+            "内心独白也必须使用简体中文",
+            f"内心独白必须使用{think_lang}"
+        ).replace(
+            "内心独白も日本語で書き",
+            f"内心独白は{think_lang}で書くこと"
+        ).replace(
+            "The inner monologue must also be written in English",
+            f"The inner monologue must be written in {think_lang}"
+        )
+        base_prompt += (
+            f"\n\n【THINK LANGUAGE — FINAL RULE】"
+            f"\n`<think>` MUST be in 【{think_lang}】 ONLY. Spoken text stays in 【{selected_lang}】."
+        )
+
     char_id = getattr(game_state, "current_char_id", "saki")
     if char_id == "saki":
         return base_prompt

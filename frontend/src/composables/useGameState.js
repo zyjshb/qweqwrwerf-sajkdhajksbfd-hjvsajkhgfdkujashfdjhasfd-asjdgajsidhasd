@@ -90,6 +90,13 @@ export function useGameState() {
   }
 
   function applyDelta(payload) {
+    if (payload.favorability !== undefined) state.favorability += payload.favorability
+    if (payload.suspicion !== undefined) state.suspicion += payload.suspicion
+    if (payload.escape_rate !== undefined) state.escapeRate += payload.escape_rate
+    // Clamp to valid ranges
+    state.favorability = Math.max(-25, Math.min(100, state.favorability))
+    state.suspicion = Math.max(0, Math.min(100, state.suspicion))
+    state.escapeRate = Math.max(0, Math.min(100, state.escapeRate))
     ecgParams.suspicion = state.suspicion
     ecgParams.favorability = state.favorability
   }

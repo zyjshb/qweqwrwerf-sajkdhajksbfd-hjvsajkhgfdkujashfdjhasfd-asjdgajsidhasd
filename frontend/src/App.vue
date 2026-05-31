@@ -68,6 +68,10 @@
       :saved-config="savedConfig"
       :ecg-suspicion="game.ecgParams.suspicion"
       :ecg-favorability="game.ecgParams.favorability"
+      :tts-playing="ttsPlaying"
+      :typewriter-active="typewriterActive"
+      :input-locked="inputLocked"
+      @typewriter-state="onTypewriterState"
       @send="handleSend"
       @restart="handleRestart"
       @toggleSaveSlots="showSaveModal = !showSaveModal"
@@ -299,6 +303,12 @@ const showSaveModal = ref(false)
 const showFatalError = ref(false)
 const hijackActive = ref(false)
 const antiEscapeActive = ref(false)
+const typewriterActive = ref(false)
+
+// Locked when: typewriter active OR TTS pending/playing
+const inputLocked = computed(() => {
+  return typewriterActive.value || ttsPending.value || ttsPlaying.value
+})
 const savedConfig = reactive({})
 const characterSprite = ref(null)
 const pendingAssistantMessage = ref(null)
@@ -454,19 +464,28 @@ function setupWSHandlers() {
 
   ws.on('THINK_CHUNK', (p) => {
     game.thinkText.value = p.text
-    game.typewriterTarget.value = p.text
-    game.typewriterMode.value = 'think'
   })
   ws.on('SPEECH_CHUNK', (p) => {
     game.speechText.value = p.text
-    game.typewriterTarget.value = p.text
-    game.typewriterMode.value = 'speech'
   })
   ws.on('TRANSLATION_CHUNK', (p) => {
     game.translationText.value = p.text
+    // Update pending message
+    if (pendingAssistantMessage.value) {
+      pendingAssistantMessage.value.translation = p.text
+    }
+    // Update last assistant message if already pushed
+    const msgs = game.chatMessages.value
+    if (msgs.length > 0) {
+      const lastMsg = msgs[msgs.length - 1]
+      if (lastMsg.role === 'assistant' && !lastMsg.translation) {
+        lastMsg.translation = p.text
+      }
+    }
   })
   ws.on('TTS_AUDIO_URL', (p) => {
     game.ttsAudioUrl.value = p.url
+    ttsPending.value = true
     playTTS(p.url)
   })
 
@@ -528,10 +547,17 @@ function setupWSHandlers() {
       translation: p.translation || game.translationText.value || '',
       ts: Date.now(),
     }
-    game.translationText.value = ''
 
     if (p.role === 'assistant') {
       pendingAssistantMessage.value = newMsg
+      ttsPending.value = true // Lock input until TTS finishes
+      // Fallback: push after 15s if typewriter never finishes
+      setTimeout(() => {
+        if (pendingAssistantMessage.value === newMsg) {
+          game.chatMessages.value.push(newMsg)
+          pendingAssistantMessage.value = null
+        }
+      }, 15000)
     } else {
       game.chatMessages.value.push(newMsg)
     }
@@ -585,24 +611,66 @@ function setupWSHandlers() {
 
 let audioCtx = null
 let currentTtsSource = null
+const ttsPlaying = ref(false)
+const ttsPending = ref(false) // TTS loading, not yet playing
 
 function playTTS(url) {
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)()
   }
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume()
+  }
   if (currentTtsSource) {
     try { currentTtsSource.stop() } catch (e) { /* ignore */ }
   }
-  fetch(url)
-    .then(r => r.arrayBuffer())
-    .then(buf => audioCtx.decodeAudioData(buf))
-    .then(audioBuffer => {
-      currentTtsSource = audioCtx.createBufferSource()
-      currentTtsSource.buffer = audioBuffer
-      currentTtsSource.connect(audioCtx.destination)
-      currentTtsSource.start()
-    })
-    .catch(e => console.error('[TTS Playback Error]', e))
+  ttsPlaying.value = true
+  ttsPending.value = false
+
+  const onPlaybackEnd = () => {
+    ttsPlaying.value = false
+    ttsPending.value = false
+  }
+
+  if (url.startsWith('data:')) {
+    // Handle base64 data URL from WebSocket
+    fetch(url)
+      .then(r => r.arrayBuffer())
+      .then(buf => audioCtx.decodeAudioData(buf))
+      .then(audioBuffer => {
+        currentTtsSource = audioCtx.createBufferSource()
+        currentTtsSource.buffer = audioBuffer
+        currentTtsSource.connect(audioCtx.destination)
+        currentTtsSource.onended = onPlaybackEnd
+        currentTtsSource.start()
+      })
+      .catch(e => { console.error('[TTS Playback Error]', e); onPlaybackEnd() })
+  } else {
+    // Handle HTTP URL
+    const fullUrl = url.startsWith('http') ? url : `http://${window.location.hostname}:9876${url}`
+    fetch(fullUrl)
+      .then(r => {
+        if (!r.ok) throw new Error(`TTS HTTP ${r.status}`)
+        return r.arrayBuffer()
+      })
+      .then(buf => audioCtx.decodeAudioData(buf))
+      .then(audioBuffer => {
+        currentTtsSource = audioCtx.createBufferSource()
+        currentTtsSource.buffer = audioBuffer
+        currentTtsSource.connect(audioCtx.destination)
+        currentTtsSource.onended = onPlaybackEnd
+        currentTtsSource.start()
+      })
+      .catch(e => { console.error('[TTS Playback Error]', e); onPlaybackEnd() })
+  }
+}
+
+function stopTTS() {
+  if (currentTtsSource) {
+    try { currentTtsSource.stop() } catch (e) { /* ignore */ }
+    currentTtsSource = null
+  }
+  ttsPlaying.value = false
 }
 
 // ── Heartbeat Sound Synth Engine ────────────────────────────────
@@ -979,18 +1047,30 @@ function playHorrorScreechSound() {
 
 
 function handleSend(text) {
-  if (hijackActive.value) return
+  if (hijackActive.value || inputLocked.value) return
   game.chatMessages.value.push({
     role: 'user',
     content: text,
     ts: Date.now(),
   })
   ws.send('CHAT_SEND', { text })
+  ttsPending.value = true // Pre-mark TTS as pending to lock input
+  // Safety timeout: unlock after 60s if TTS never arrives
+  setTimeout(() => { ttsPending.value = false }, 60000)
+}
+
+function onTypewriterState(active) {
+  typewriterActive.value = active
 }
 
 function handleTypingComplete() {
   if (pendingAssistantMessage.value) {
-    game.chatMessages.value.push(pendingAssistantMessage.value)
+    const msg = pendingAssistantMessage.value
+    // Ensure translation is included
+    if (!msg.translation && game.translationText.value) {
+      msg.translation = game.translationText.value
+    }
+    game.chatMessages.value.push(msg)
     pendingAssistantMessage.value = null
   }
 }
@@ -999,6 +1079,9 @@ function handleRestart() {
   game.reset()
   hijackActive.value = false
   showFatalError.value = false
+  fakePopups.value = []
+  screenFreezeActive.value = false
+  bsodActive.value = false
   ws.send('RESTART_GAME', {})
 }
 
@@ -1036,11 +1119,13 @@ function handleGlobalKeydown(e) {
 function handleSaveAndExit(slot) {
   ws.send('SAVE_SLOT', { slot })
   showSaveModal.value = false
+  stopTTS()
   currentView.value = 'launcher'
 }
 
 function handleExitWithoutSaving() {
   showSaveModal.value = false
+  stopTTS()
   currentView.value = 'launcher'
 }
 
@@ -1049,7 +1134,7 @@ function handleExitWithoutSaving() {
 let resizeCheckTimer = null
 
 function checkWindowSize() {
-  antiEscapeActive.value = window.innerWidth < 1000
+  antiEscapeActive.value = window.innerWidth < 800
 }
 
 // ── Lifecycle ───────────────────────────────────────────────────

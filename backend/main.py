@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import uvicorn
+import tempfile
 
 from websocket.game_ws import GameSession
 
@@ -34,7 +35,12 @@ app = FastAPI(
 # CORS: allow the Vite dev server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:9876",
+        "http://127.0.0.1:9876",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,6 +61,21 @@ async def game_websocket(ws: WebSocket):
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "saki-backend", "version": "2.0.0"}
+
+
+# ── TTS audio file serving ───────────────────────────────────────────
+
+@app.get("/tts_audio/{filename}")
+async def serve_tts_audio(filename: str):
+    """Serve TTS audio files from the system temp directory."""
+    import re
+    # Security: only allow saki_tts_ prefixed WAV files
+    if not re.match(r'^saki_tts_[a-zA-Z0-9_]+\.wav$', filename):
+        return {"error": "Invalid filename"}
+    filepath = os.path.join(tempfile.gettempdir(), filename)
+    if not os.path.exists(filepath):
+        return {"error": "File not found"}
+    return FileResponse(filepath, media_type="audio/wav")
 
 
 # ── Root / info page ─────────────────────────────────────────────────

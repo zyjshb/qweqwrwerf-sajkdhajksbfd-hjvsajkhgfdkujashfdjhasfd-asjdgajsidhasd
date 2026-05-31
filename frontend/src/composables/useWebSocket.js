@@ -4,7 +4,9 @@
  */
 import { ref, reactive, onUnmounted } from 'vue'
 
-const WS_URL = `ws://${window.location.hostname}:9876/ws/game`
+const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws'
+const WS_PORT = window.location.port || '9876'
+const WS_URL = `${WS_PROTOCOL}://${window.location.hostname}:${WS_PORT}/ws/game`
 
 export function useWebSocket() {
   const connected = ref(false)
@@ -35,6 +37,7 @@ export function useWebSocket() {
     ws.onopen = () => {
       connected.value = true
       error.value = null
+      reconnectDelay = 2000  // Reset backoff on successful connection
       startPing()
     }
 
@@ -89,12 +92,15 @@ export function useWebSocket() {
     connected.value = false
   }
 
+  let reconnectDelay = 2000
   function scheduleReconnect() {
     if (reconnectTimer) return
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null
       connect()
-    }, 2000)
+    }, reconnectDelay)
+    // Exponential backoff: 2s, 4s, 8s, 16s, cap at 30s
+    reconnectDelay = Math.min(reconnectDelay * 2, 30000)
   }
 
   function startPing() {

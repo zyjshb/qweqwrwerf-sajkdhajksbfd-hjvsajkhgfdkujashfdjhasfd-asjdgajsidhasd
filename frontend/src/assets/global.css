@@ -2,6 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Design tokens (CSS custom properties) ──────────────────── */
+:root {
+  --color-bg: #0a0a0a;
+  --color-bg-elevated: #111111;
+  --color-bg-surface: #1a0505;
+  --color-primary: #CC0000;
+  --color-primary-bright: #ef4444;
+  --color-primary-dim: #884444;
+  --color-primary-muted: #550000;
+  --color-text: #CC0000;
+  --color-text-bright: #ff4444;
+  --color-text-dim: #884444;
+  --color-text-think: #fda4af;
+  --color-text-translation: #ff2222;
+  --color-accent-green: #22c55e;
+  --color-border: #330000;
+  --color-border-bright: #550000;
+  --z-content: 0;
+  --z-sprite: 10;
+  --z-chrome: 20;
+  --z-overlay: 30;
+  --z-modal: 50;
+  --z-critical: 100;
+  --z-crt: 200;
+}
+
 /* ── Base: terminal aesthetic ─────────────────────────────────── */
 * {
   margin: 0;
@@ -12,10 +38,13 @@
 html, body, #app {
   width: 100%;
   height: 100%;
-  background: #000000;
-  color: #CC0000;
+  background: var(--color-bg);
+  color: var(--color-primary);
   font-family: 'Consolas', 'JetBrains Mono', 'Fira Code', 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', monospace;
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 /* ── CRT Scanline overlay (global) ────────────────────────────── */
@@ -34,7 +63,7 @@ body::after {
     rgba(0, 0, 0, 0.12) 4px
   );
   pointer-events: none;
-  z-index: 9999;
+  z-index: var(--z-crt);
 }
 
 /* ── CRT vignette ─────────────────────────────────────────────── */
@@ -47,10 +76,14 @@ body::before {
   height: 100%;
   background: radial-gradient(ellipse at center, transparent 50%, rgba(0, 0, 0, 0.82) 100%);
   pointer-events: none;
-  z-index: 9998;
+  z-index: var(--z-crt);
 }
 
 /* ── Scrollbar customization ──────────────────────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #550000 #0A0A0A;
+}
 ::-webkit-scrollbar {
   width: 4px;
 }
@@ -68,7 +101,7 @@ body::before {
 /* ── Selection ────────────────────────────────────────────────── */
 ::selection {
   background: #CC0000;
-  color: #000000;
+  color: #FFFFFF;
 }
 
 /* ── Mita Analog Horror Tracking Line ── */

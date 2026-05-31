@@ -34,6 +34,7 @@ class TTSClient:
         self._working_endpoint: str = "/tts"
         self._current_model_lang: Optional[str] = None
         self._probed: bool = False
+        self._last_temp_file: Optional[str] = None
 
     # ── public API ───────────────────────────────────────────────
 
@@ -76,12 +77,20 @@ class TTSClient:
         if wav_bytes is None:
             return None
 
+        # Clean up previous temp file
+        if self._last_temp_file:
+            try:
+                os.unlink(self._last_temp_file)
+            except OSError:
+                pass
+
         # Save to temp file
         tmp = tempfile.NamedTemporaryFile(
             suffix=".wav", prefix="saki_tts_", delete=False
         )
         tmp.write(wav_bytes)
         tmp.close()
+        self._last_temp_file = tmp.name
         return tmp.name
 
     # ── internals ────────────────────────────────────────────────
@@ -139,9 +148,12 @@ class TTSClient:
         sovits_w = config.get("sovits_weights_path") or defaults["sovits"]
 
         # Resolve relative paths
-        for p in [ref_wav, gpt_w, sovits_w]:
-            if p and not os.path.isabs(p):
-                p = os.path.abspath(p)
+        if ref_wav and not os.path.isabs(ref_wav):
+            ref_wav = os.path.abspath(ref_wav)
+        if gpt_w and not os.path.isabs(gpt_w):
+            gpt_w = os.path.abspath(gpt_w)
+        if sovits_w and not os.path.isabs(sovits_w):
+            sovits_w = os.path.abspath(sovits_w)
 
         return ref_wav, prompt_text, gpt_w, sovits_w
 

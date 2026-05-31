@@ -11,6 +11,14 @@ import math
 import colorsys
 from PIL import Image, ImageDraw, ImageFilter, ImageEnhance, ImageTk
 
+# Pillow 10+ compatibility: resampling constants moved to Image.Resampling
+try:
+    BILINEAR = Image.Resampling.BILINEAR
+    NEAREST = Image.Resampling.NEAREST
+except AttributeError:
+    BILINEAR = BILINEAR
+    NEAREST = NEAREST
+
 
 class ProceduralFX:
     """Static methods that return ImageTk.PhotoImage objects ready for tkinter."""
@@ -55,7 +63,7 @@ class ProceduralFX:
             draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=dark_pool)
 
         img = img.filter(ImageFilter.GaussianBlur(radius=1.0))
-        img = img.resize((width, height), Image.BILINEAR)
+        img = img.resize((width, height), BILINEAR)
         return ImageTk.PhotoImage(img)
 
     @staticmethod
@@ -82,7 +90,7 @@ class ProceduralFX:
             )
 
         img = img.filter(ImageFilter.GaussianBlur(radius=3))
-        img = img.resize((width, height), Image.BILINEAR)
+        img = img.resize((width, height), BILINEAR)
         return ImageTk.PhotoImage(img)
 
     @staticmethod
@@ -112,7 +120,7 @@ class ProceduralFX:
                     v = random.randint(0, 80)
                     pixels[x, y] = (v, 0, 0, alpha)
 
-        img = img.resize((width, height), Image.NEAREST)
+        img = img.resize((width, height), NEAREST)
         return ImageTk.PhotoImage(img)
 
     @staticmethod
@@ -281,5 +289,5 @@ class ProceduralFX:
                 )
                 draw.rectangle([cx, cy, cx + w - 1, cy + 1], fill=color)
 
-        img = img.resize((width, height), Image.NEAREST)
+        img = img.resize((width, height), NEAREST)
         return ImageTk.PhotoImage(img)

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import queue
+import re
 import threading
 import time
 import traceback
@@ -28,8 +29,6 @@ from audio.tts_client import TTSClient
 from resources.game_constants import (
     normalize_language, detect_language, translation_required,
     LANGUAGE_PROFILES, build_offline_translation_line,
-    extract_terminal_parenthetical_translation,
-    strip_terminal_parenthetical_translation,
 )
 
 
@@ -52,7 +51,7 @@ class GameSession:
         self.alive: bool = True
         self.last_ping: float = time.time()
 
-        # Slot paths
+        # Slot paths — resolve to backend directory regardless of CWD
         self._slot_dir = "."
 
     # ── lifecycle ─────────────────────────────────────────────────
@@ -78,7 +77,8 @@ class GameSession:
                 self.alive = False
                 break
             except Exception:
-                await self._safe_send(envelope_server("ERROR", message=traceback.format_exc()))
+                traceback.print_exc()  # log server-side only
+                await self._safe_send(envelope_server("ERROR", message="Internal server error"))
 
     # ── dispatcher ────────────────────────────────────────────────
 
@@ -158,7 +158,7 @@ class GameSession:
             await self._process_reply(reply, user_input, cycle)
         else:
             # Online: run API call in thread, poll for result
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             api_done = threading.Event()
             api_result = {}
 
@@ -177,53 +177,45 @@ class GameSession:
             thread = threading.Thread(target=_runner, daemon=True)
             thread.start()
 
-            # Poll with timeout (circuit breaker: 60s)
+            # Wait for thread to finish (circuit breaker: 60s)
             deadline = time.time() + 60.0
             while not api_done.is_set() and time.time() < deadline:
                 await asyncio.sleep(0.1)
-                # Process any intermediate results from ui_queue
-                while not self.ui_queue.empty():
-                    try:
-                        q_cycle, q_type, q_data = self.ui_queue.get_nowait()
-                        if q_cycle == cycle:
-                            if q_type == "API_SUCCESS":
-                                api_result["reply"] = q_data
-                            elif q_type == "API_MOCK":
-                                api_result["reply"] = q_data
-                            elif q_type == "API_FALLBACK":
-                                api_result["fallback"] = q_data
-                    except queue.Empty:
-                        break
 
-            # Drain remaining queue items
+            # Drain ALL queue items for this cycle (single pass)
             while not self.ui_queue.empty():
                 try:
                     q_cycle, q_type, q_data = self.ui_queue.get_nowait()
                     if q_cycle == cycle:
-                        if q_type == "API_SUCCESS" and "reply" not in api_result:
+                        if q_type in ("API_SUCCESS", "API_MOCK") and "reply" not in api_result:
                             api_result["reply"] = q_data
-                        elif q_type == "API_MOCK" and "reply" not in api_result:
-                            api_result["reply"] = q_data
+                        elif q_type == "API_FALLBACK" and "reply" not in api_result:
+                            api_result["fallback"] = q_data
                 except queue.Empty:
                     break
 
+            # Only process once — check cycle_id to prevent stale responses
+            if self.state.cycle_id != cycle:
+                return
             if "reply" in api_result:
                 await self._process_reply(api_result["reply"], user_input, cycle)
             elif "fallback" in api_result:
                 user_inp, err = api_result["fallback"]
                 fallback_reply = _generate_mock_reply(user_inp, self.state.cached_lang)
                 await self._process_reply(fallback_reply, user_input, cycle)
-                await self._safe_send(envelope_server("ERROR", message=f"API fallback: {err}"))
             else:
-                # Circuit breaker: timeout exceeded
                 fallback_reply = _generate_mock_reply(user_input, self.state.cached_lang)
                 await self._process_reply(fallback_reply, user_input, cycle)
-                await self._safe_send(envelope_server("ERROR", message="AI response timeout — using offline fallback"))
 
     async def _process_reply(self, reply: str, user_input: str, cycle: int):
         """Parse the LLM reply, apply deltas, stream to frontend."""
         if self.state.cycle_id != cycle:
             return
+        # Prevent double processing for the same cycle
+        if hasattr(self, '_last_processed_cycle') and self._last_processed_cycle == cycle:
+            print(f"[Reply] Skipping duplicate for cycle {cycle}")
+            return
+        self._last_processed_cycle = cycle
 
         parsed = parse_api_response(reply, user_input, self.state)
 
@@ -232,23 +224,48 @@ class GameSession:
         if think:
             await self._safe_send(envelope_server("THINK_CHUNK", text=think))
 
-        # Stream spoken text with typewriter effect — frontend handles timing
+        # Get spoken text — use parsed version (monologue stripped)
         spoken = parsed.get("spoken", "")
+        clean_spoken = spoken
         user_lang = detect_language(user_input, self.state.cached_lang)
 
-        if spoken:
-            # Extract and send translation if present
-            translation = extract_terminal_parenthetical_translation(spoken, user_lang)
-            clean_spoken = spoken
-            if translation:
-                clean_spoken = strip_terminal_parenthetical_translation(spoken, user_lang)
+        # Force translation via API — never rely on LLM's inline translation
+        translation = ""
 
+        if spoken:
             await self._safe_send(envelope_server("SPEECH_CHUNK", text=clean_spoken))
+
+            # Fallback: fetch translation via API if LLM didn't provide one
+            if not translation and self.config.get("api_key"):
+                saki_lang = self.state.cached_lang
+                if user_lang and user_lang != saki_lang:
+                    import requests as req
+                    try:
+                        api_key = self.config["api_key"]
+                        api_base = self.config.get("api_base", "https://api.deepseek.com")
+                        model_name = self.config.get("model_name", "deepseek-v4-flash")
+                        url = f"{api_base.rstrip('/')}/chat/completions"
+                        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                        payload = {
+                            "model": model_name,
+                            "messages": [
+                                {"role": "system", "content": f"Translate to {user_lang}. Output ONLY translation in （ ）."},
+                                {"role": "user", "content": clean_spoken[:300]}
+                            ],
+                            "temperature": 0.3, "max_tokens": 150,
+                        }
+                        resp = req.post(url, headers=headers, json=payload, timeout=10, proxies={"http": None, "https": None})
+                        if resp.status_code == 200:
+                            raw = resp.json()["choices"][0]["message"]["content"].strip()
+                            raw = re.sub(r'^[（\(]\s*(日语|中文|English|Japanese|Chinese|日本語)\s*[）\)]', '', raw).strip()
+                            c = raw.strip('（） ()')
+                            if len(c) >= 2:
+                                translation = raw if (raw.startswith("（") and raw.endswith("）")) else f"（{c}）"
+                    except Exception as e:
+                        print(f"[Translation Error] {e}")
+
             if translation:
                 await self._safe_send(envelope_server("TRANSLATION_CHUNK", text=translation))
-
-            # Trigger TTS synthesis
-            await self._trigger_tts(clean_spoken, cycle)
 
         # Process delta
         delta = parsed.get("delta")
@@ -300,23 +317,89 @@ class GameSession:
         self.chat_history.append({"role": "assistant", "content": reply})
         await self._safe_send(envelope_server("CHAT_APPEND",
             role="assistant",
-            content=spoken_for_history or reply,
+            content=clean_spoken or spoken or reply,
             think=think,
+            translation=translation,
         ))
+
+        # Trigger TTS after a dynamic delay based on think text length
+        # Think typewriter runs at ~30ms/char, add 2s buffer
+        tts_text = clean_spoken or spoken
+        if tts_text:
+            think_delay = max(3, len(think) * 0.03 + 2) if think else 3
+            async def _delayed_tts_reply():
+                await asyncio.sleep(think_delay)
+                await self._trigger_tts(tts_text, cycle)
+            asyncio.create_task(_delayed_tts_reply())
 
         # Trigger glitch effects based on suspicion
         await self._schedule_glitch()
 
     # ── TTS ───────────────────────────────────────────────────────
 
+    async def _fetch_translation(self, text: str, source_lang: str, target_lang: str) -> str:
+        """Fetch translation synchronously. Returns translation string or empty."""
+        import requests as req
+        loop = asyncio.get_running_loop()
+
+        def _do():
+            try:
+                api_key = self.config.get("api_key", "")
+                api_base = self.config.get("api_base", "https://api.deepseek.com")
+                model_name = self.config.get("model_name", "deepseek-v4-flash")
+                if not api_key:
+                    print("[Translation] No API key")
+                    return ""
+                url = f"{api_base.rstrip('/')}/chat/completions"
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                payload = {
+                    "model": model_name,
+                    "messages": [
+                        {"role": "system", "content": (
+                            f"You are a translator. Translate the following {source_lang} text into natural {target_lang}. "
+                            f"Wrap your translation in full-width parentheses （ ）. "
+                            f"Output ONLY the translated text, nothing else."
+                        )},
+                        {"role": "user", "content": text[:500]}  # Limit text length
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 200,
+                }
+                print(f"[Translation] Calling API: {source_lang} -> {target_lang}, text_len={len(text)}")
+                resp = req.post(url, headers=headers, json=payload, timeout=15,
+                                proxies={"http": None, "https": None})
+                print(f"[Translation] API response: status={resp.status_code}")
+                if resp.status_code == 200:
+                    raw = resp.json()["choices"][0]["message"]["content"].strip()
+                    print(f"[Translation] Raw response: {raw[:100]}")
+                    result = raw
+                    # Strip language labels like (日语), (中文), (English)
+                    result = re.sub(r'^[（\(]\s*(日语|中文|English|Japanese|Chinese|日本語)\s*[）\)]', '', result).strip()
+                    # Extract actual translation content
+                    content = result.strip('（） ()')
+                    if len(content) < 2:
+                        print(f"[Translation] Empty response, skipping")
+                        return ""
+                    if not (result.startswith("（") and result.endswith("）")):
+                        result = f"（{content}）"
+                    print(f"[Translation] OK: {result[:60]}...")
+                    return result
+            except Exception as e:
+                print(f"[Translation Error] {e}")
+            return ""
+
+        return await loop.run_in_executor(None, _do)
+
     async def _trigger_tts(self, text: str, cycle: int):
         """Run TTS synthesis in thread, stream result path back."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _synth():
             try:
                 cleaned = self.tts_client.clean_text_for_tts(text)
                 lang = detect_language(cleaned, self.state.cached_lang)
+                print(f"[TTS] Input text length: {len(text)}, cleaned length: {len(cleaned)}, lang: {lang}")
+                print(f"[TTS] Cleaned text: {cleaned[:200]}...")
                 result_path = self.tts_client.synthesize(
                     text=cleaned,
                     language=lang,
@@ -329,7 +412,16 @@ class GameSession:
 
         result = await loop.run_in_executor(None, _synth)
         if result and self.state.cycle_id == cycle:
-            await self._safe_send(envelope_server("TTS_AUDIO_URL", url=result))
+            # Send audio as base64 data URL via WebSocket
+            import base64
+            try:
+                with open(result, "rb") as f:
+                    audio_bytes = f.read()
+                b64 = base64.b64encode(audio_bytes).decode("ascii")
+                data_url = f"data:audio/wav;base64,{b64}"
+                await self._safe_send(envelope_server("TTS_AUDIO_URL", url=data_url))
+            except Exception as e:
+                print(f"[TTS Send Error] {e}")
 
     # ── glitch scheduling ─────────────────────────────────────────
 
@@ -490,6 +582,12 @@ class GameSession:
     # ── screen capture agent ──────────────────────────────────────
 
     async def _handle_screen_capture_start(self, payload: dict):
+        # Security: only allow agent from localhost connections
+        client_host = self.ws.client.host if self.ws.client else ""
+        if client_host not in ("127.0.0.1", "::1", "localhost"):
+            await self._safe_send(envelope_server("ERROR", message="Agent takeover is only allowed from localhost"))
+            return
+
         window_name = payload.get("window_name", "")
         interval = float(payload.get("interval", 2.0))
         from agent.vlm_agent import VLMAgent
@@ -501,7 +599,7 @@ class GameSession:
         self.agent_active = True
 
         # Run agent loop in executor
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         async def _agent_loop():
             while self.agent_active and self.alive:
@@ -533,10 +631,16 @@ class GameSession:
         # Reset game state and clear old chat history to ensure a clean new game start
         self.state.reset()
         self.chat_history = []
-        
+
         # Push full state sync
         await self._push_state_sync()
         await self._push_slot_list()
+
+        # Pre-warm DeepSeek API connection in background
+        api_key = self.config.get("api_key", "")
+        if api_key:
+            asyncio.create_task(self._warm_up_api())
+
         # Send the initial plot — Saki's first greeting
         await self._send_initial_plot()
 
@@ -559,13 +663,38 @@ class GameSession:
             },
         }
 
+        # Cross-language translations for the greeting
+        GREETING_TRANSLATIONS = {
+            "日本語": {
+                "中文": "（俯身靠近，粉色的发丝垂落在你的脸颊旁，红色的眼眸在暗处微微发光）你终于醒了……我还以为你要一直睡下去呢。别怕，这里是安全的——因为我在。我是纱希。从今天起，我会一直陪着你的。",
+                "English": "(leans in close, pink hair brushing against your cheek, crimson eyes glimmering in the dark) You're finally awake... I thought you might sleep forever. Don't be afraid — you're safe here, because I'm with you. I'm Saki. From today on, I'll always be by your side.",
+            },
+            "English": {
+                "中文": "（俯身靠近，粉色的发丝垂落在你的脸颊旁，红色的眼眸在暗处微微发光）你终于醒了……我还以为你要一直睡下去呢。别怕，这里是安全的——因为我在。我是纱希。从今天起，我会一直陪着你的。",
+                "日本語": "（身をかがめて近づき、ピンクの髪があなたの頬にそっと触れ、紅い瞳が暗がりで微かに光る）やっと起きたね……ずっとこのまま眠り続けるのかと思ったよ。怖がらないで——ここは安全だから。私がいるから。私は紗希。今日からずっと、あなたのそばにいるよ。",
+            },
+            "中文": {
+                "English": "(leans in close, pink hair brushing against your cheek, crimson eyes glimmering in the dark) You're finally awake... I thought you might sleep forever. Don't be afraid — you're safe here, because I'm with you. I'm Saki. From today on, I'll always be by your side.",
+                "日本語": "（身をかがめて近づき、ピンクの髪があなたの頬にそっと触れ、紅い瞳が暗がりで微かに光る）やっと起きたね……ずっとこのまま眠り続けるのかと思ったよ。怖がらないで——ここは安全だから。私がいるから。私は紗希。今日からずっと、あなたのそばにいるよ。",
+            },
+        }
+
         greeting = FIRST_GREETINGS.get(lang, FIRST_GREETINGS["中文"])
         think = greeting["think"]
         spoken = greeting["spoken"]
 
         await self._safe_send(envelope_server("THINK_CHUNK", text=think))
         await self._safe_send(envelope_server("SPEECH_CHUNK", text=spoken))
-        await self._trigger_tts(spoken, self.state.cycle_id)
+
+        # Send hardcoded greeting translation
+        greeting_translation = ""
+        translations = GREETING_TRANSLATIONS.get(lang, {})
+        for t_lang, t_text in translations.items():
+            if t_lang != lang:
+                greeting_translation = t_text
+                break
+        if greeting_translation:
+            await self._safe_send(envelope_server("TRANSLATION_CHUNK", text=greeting_translation))
 
         # Apply small initial delta
         self.state.favorability = min(100, self.state.favorability + 5)
@@ -578,14 +707,39 @@ class GameSession:
             escape_rate=self.state.escape_rate,
         ))
 
-        # Add to chat history
+        # Add to chat history (include translation in CHAT_APPEND)
         full_reply = f"<think>{think}</think>\n{spoken}"
         self.chat_history.append({"role": "assistant", "content": full_reply})
         await self._safe_send(envelope_server("CHAT_APPEND",
             role="assistant",
             content=spoken,
             think=think,
+            translation=greeting_translation,
         ))
+
+        # Trigger TTS after a delay so the typewriter can finish the think block first
+        async def _delayed_tts():
+            await asyncio.sleep(5)  # Wait for think typewriter to finish
+            await self._trigger_tts(spoken, self.state.cycle_id)
+        asyncio.create_task(_delayed_tts())
+
+    # ── API warm-up ──────────────────────────────────────────────
+
+    async def _warm_up_api(self):
+        """Send a tiny request to pre-establish the API connection."""
+        import requests as req
+        try:
+            api_key = self.config.get("api_key", "")
+            api_base = self.config.get("api_base", "https://api.deepseek.com")
+            model_name = self.config.get("model_name", "deepseek-v4-flash")
+            url = f"{api_base.rstrip('/')}/chat/completions"
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            payload = {"model": model_name, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5}
+            req.post(url, headers=headers, json=payload, timeout=10,
+                     proxies={"http": None, "https": None})
+            print("[API Warm-up] Connection established")
+        except Exception as e:
+            print(f"[API Warm-up] {e}")
 
     # ── API connection test ───────────────────────────────────────
 
@@ -761,7 +915,7 @@ class GameSession:
 
         ftypes = [(item[0], item[1]) for item in filetypes_list]
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _picker():
             import tkinter as tk

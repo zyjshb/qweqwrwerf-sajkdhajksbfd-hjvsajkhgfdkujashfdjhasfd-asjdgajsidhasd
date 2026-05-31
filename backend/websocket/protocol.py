@@ -38,6 +38,7 @@ CLIENT_TYPES = {
     "SCREEN_CAPTURE_STOP", # stop screen capture
     "LAUNCH_GAME",         # enter game from launcher, trigger initial plot
     "API_TEST",            # test API connection from launcher
+    "REQUEST_FILE_PICKER", # open native file picker dialog
     "CUSTOM_CHAR_SAVE",    # save custom character to custom_characters.json
     "CUSTOM_CHAR_LOAD",    # load all custom characters
     "CUSTOM_CHAR_DELETE",  # delete a custom character by id
@@ -102,6 +103,7 @@ SERVER_TYPES = {
     "SLOT_LIST",            # save slot metadata list
     "CONFIG_ACK",           # config update acknowledged
     "CONFIG_SYNC",          # server pushes saved configuration on connect
+    "FILE_PICKER_RESULT",   # native file picker result
 }
 
 
