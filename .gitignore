@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 *.pyo
+node_modules/
+dist/
 .claude/
 yandere_config.json
 temp_saki_*.wav
@@ -9,3 +11,8 @@ temp_saki_*.wav
 models/
 save_slot_*.json
 custom_characters.json
+heartbeat.wav
+*.mp4
+*.png
+*.jpg
+*_backup*/
