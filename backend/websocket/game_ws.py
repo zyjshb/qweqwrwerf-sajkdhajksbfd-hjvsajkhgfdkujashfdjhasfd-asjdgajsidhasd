@@ -52,7 +52,8 @@ class GameSession:
         self.last_ping: float = time.time()
 
         # Slot paths — resolve to backend directory regardless of CWD
-        self._slot_dir = "."
+        import os as _os
+        self._slot_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
 
     # ── lifecycle ─────────────────────────────────────────────────
 
@@ -128,6 +129,13 @@ class GameSession:
     async def _handle_chat(self, payload: dict):
         user_input = (payload.get("text") or "").strip()
         if not user_input or self.state.game_over:
+            return
+
+        # Enforce max input length to prevent API abuse
+        MAX_INPUT_LENGTH = 2000
+        if len(user_input) > MAX_INPUT_LENGTH:
+            await self._safe_send(envelope_server("ERROR",
+                message=f"Input too long ({len(user_input)} chars). Max is {MAX_INPUT_LENGTH}."))
             return
 
         self.state.last_user_input = user_input
@@ -361,8 +369,13 @@ class GameSession:
                 ending=self.state.pending_ending,
             ))
 
-        # Add to chat history
+        # Add to chat history — trim to prevent unbounded growth
         self.chat_history.append({"role": "assistant", "content": reply})
+        MAX_HISTORY = 40  # keep system prompt + last ~20 exchanges
+        if len(self.chat_history) > MAX_HISTORY:
+            # Keep system prompt (index 0) and trim oldest messages after it
+            self.chat_history = [self.chat_history[0]] + self.chat_history[-(MAX_HISTORY - 1):]
+
         await self._safe_send(envelope_server("CHAT_APPEND",
             role="assistant",
             content=clean_spoken or spoken or reply,
@@ -907,50 +920,6 @@ class GameSession:
             await self.ws.send_text(text)
         except Exception:
             self.alive = False
-
-    async def _translate_and_send_think(self, think: str, src_lang: str, tgt_lang: str):
-        """Translate think block to player's language and send as THINK_CHUNK."""
-        if not self.config.get("api_key"):
-            return
-        try:
-            lang_names = {"中文": "Simplified Chinese", "English": "English", "日本語": "Japanese"}
-            src_name = lang_names.get(src_lang, src_lang)
-            tgt_name = lang_names.get(tgt_lang, tgt_lang)
-            api_key = self.config["api_key"]
-            api_base = self.config.get("api_base", "https://api.deepseek.com")
-
-            def _do_trans():
-                import requests as _req
-                # Use a fast model for think translation. Prefer flash/mini variants
-                # if on DeepSeek, otherwise fall back to the configured model.
-                main_model = self.config.get("model_name", "gpt-4o-mini")
-                if "deepseek" in api_base.lower():
-                    trans_model = "deepseek-chat"
-                elif "openai" in api_base.lower():
-                    trans_model = "gpt-4o-mini"
-                else:
-                    trans_model = main_model
-                return _req.post(
-                    f"{api_base.rstrip('/')}/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={
-                        "model": trans_model,
-                        "messages": [
-                            {"role": "system", "content": f"Translate this inner monologue from {src_name} to {tgt_name}. Keep the emotional tone and fragmented style. Output ONLY the translation, no explanations."},
-                            {"role": "user", "content": think[:400]}
-                        ],
-                        "temperature": 0.0, "max_tokens": 300,
-                    },
-                    timeout=10, proxies={"http": None, "https": None})
-
-            loop = asyncio.get_running_loop()
-            resp = await loop.run_in_executor(None, _do_trans)
-            if resp.status_code == 200:
-                translated = resp.json()["choices"][0]["message"]["content"].strip()
-                if translated:
-                    await self._safe_send(envelope_server("THINK_CHUNK", text=translated))
-        except Exception:
-            pass  # think translation is best-effort
 
     async def _push_state_sync(self):
         import getpass

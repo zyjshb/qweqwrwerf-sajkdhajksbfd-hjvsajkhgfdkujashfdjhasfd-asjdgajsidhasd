@@ -136,6 +136,7 @@ def fetch_api_response(chat_history, api_key, base_url, model_name,
             "model": model_name,
             "messages": chat_history,
             "temperature": 0.95,
+            "max_tokens": 800,
         }
 
         # Robust retry wrapper (up to 2 attempts, timeout=50s) to handle DeepSeek congestion

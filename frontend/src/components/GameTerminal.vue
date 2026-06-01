@@ -762,19 +762,18 @@ function startTypewriterSequence(think = '', speech = '', translation = '') {
   typewriterInterval = setInterval(tick, Math.max(1, 30 / speedMultiplier.value))
 }
 
-let shaked = false
+let triggeredDangerWords = new Set()
 function detectAndTriggerDangerGlitches(typed, fullCleanText) {
-  const containsDanger = DANGER_WORDS.some(w => fullCleanText.includes(w))
-  const typedDanger = DANGER_WORDS.some(w => typed.includes(w))
-  
-  if (containsDanger && typedDanger && !shaked) {
-    shaked = true
+  const matchedWord = DANGER_WORDS.find(w => fullCleanText.includes(w) && typed.includes(w))
+
+  if (matchedWord && !triggeredDangerWords.has(matchedWord)) {
+    triggeredDangerWords.add(matchedWord)
     playTypewriterBeep(true)
     emit('triggerGlitch', 'earthquake')
     emit('triggerGlitch', 'font_shake')
     if (Math.random() < 0.4) emit('triggerGlitch', 'static_noise')
     if (Math.random() < 0.3) emit('triggerGlitch', 'fake_error')
-    
+
     setTimeout(() => {
       emit('removeGlitch', 'earthquake')
       emit('removeGlitch', 'font_shake')
@@ -806,7 +805,7 @@ function triggerCarnageGlitches() {
 
 watch(() => props.thinkText, (newThink) => {
   if (newThink && typewriterMode.value === 'idle') {
-    shaked = false
+    triggeredDangerWords.clear()
     speechQueued = false
     translationQueued = false
     startTypewriterSequence()
@@ -816,7 +815,7 @@ watch(() => props.thinkText, (newThink) => {
 watch(() => props.speechText, (newSpeech) => {
   if (!newSpeech) return
   if (typewriterMode.value === 'idle') {
-    shaked = false
+    triggeredDangerWords.clear()
     startTypewriterSequence()
   } else if (typewriterMode.value === 'think') {
     // Think is still playing — queue speech to start after think finishes

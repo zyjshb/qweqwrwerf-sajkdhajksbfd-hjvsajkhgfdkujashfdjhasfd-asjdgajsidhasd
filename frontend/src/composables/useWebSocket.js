@@ -38,6 +38,7 @@ export function useWebSocket() {
       connected.value = true
       error.value = null
       reconnectDelay = 2000  // Reset backoff on successful connection
+      reconnectAttempts = 0
       startPing()
     }
 
@@ -93,8 +94,17 @@ export function useWebSocket() {
   }
 
   let reconnectDelay = 2000
+  let reconnectAttempts = 0
+  const MAX_RECONNECT_ATTEMPTS = 10
+
   function scheduleReconnect() {
     if (reconnectTimer) return
+    reconnectAttempts++
+    if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+      console.error('[WS] Max reconnect attempts reached. Giving up.')
+      error.value = 'Connection lost — max retries exhausted'
+      return
+    }
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null
       connect()
