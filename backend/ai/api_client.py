@@ -135,7 +135,7 @@ def fetch_api_response(chat_history, api_key, base_url, model_name,
         payload = {
             "model": model_name,
             "messages": chat_history,
-            "temperature": 0.95,
+            "temperature": 0.8,
             "max_tokens": 800,
         }
 
@@ -177,29 +177,37 @@ def fetch_api_response(chat_history, api_key, base_url, model_name,
             reasoning = message.get("reasoning_content", "")
 
             if reasoning and reasoning.strip():
-                # ---- Reasoning model (e.g. deepseek-v4-pro): merge reasoning_content as <think> block ----
+                # ---- Reasoning model (e.g. deepseek-v4-pro) ----
+                # reasoning_content is META chain-of-thought ("OK let me analyse..."),
+                # NOT character inner monologue.  If content already has a <think>
+                # block the model followed the system prompt correctly — use it as-is.
                 spoken = message.get("content", "").strip()
 
-                # Try to extract LLM-authored delta from content; fall back to local
-                llm_delta = None
-                if "||" in spoken:
-                    try:
-                        _parts = spoken.split("||")
-                        llm_delta = json.loads(_parts[1].strip())
-                        spoken = _parts[0].strip()
-                    except Exception:
-                        pass
-
-                if llm_delta and isinstance(llm_delta, dict) and "favorability" in llm_delta:
-                    delta_dict = llm_delta
-                    print(f"[API Reasoning Model] Using LLM-authored delta: {delta_dict}")
+                if '<think>' in spoken.lower() or '<thinking>' in spoken.lower():
+                    # Content is already properly formatted — trust it directly
+                    reply = spoken
                 else:
-                    intent = classify_player_intent(game_state.last_user_input)
-                    d_f, d_s, d_e = roll_delta_for_intent(intent)
-                    delta_dict = {"favorability": d_f, "suspicion": d_s, "escape_rate": d_e, "game_over": False}
-                    print(f"[API Reasoning Model] LLM delta missing, using auto-delta: {delta_dict}")
+                    # Model didn't include a think block — wrap reasoning as one,
+                    # then build the delta suffix ourselves
+                    llm_delta = None
+                    if "||" in spoken:
+                        try:
+                            _parts = spoken.split("||")
+                            llm_delta = json.loads(_parts[1].strip())
+                            spoken = _parts[0].strip()
+                        except Exception:
+                            pass
 
-                reply = f"<think>{reasoning}</think>\n{spoken}\n||{json.dumps(delta_dict)}||"
+                    if llm_delta and isinstance(llm_delta, dict) and "favorability" in llm_delta:
+                        delta_dict = llm_delta
+                        print(f"[API Reasoning Model] Using LLM-authored delta: {delta_dict}")
+                    else:
+                        intent = classify_player_intent(game_state.last_user_input)
+                        d_f, d_s, d_e = roll_delta_for_intent(intent)
+                        delta_dict = {"favorability": d_f, "suspicion": d_s, "escape_rate": d_e, "game_over": False}
+                        print(f"[API Reasoning Model] LLM delta missing, using auto-delta: {delta_dict}")
+
+                    reply = f"<think>{reasoning}</think>\n{spoken}\n||{json.dumps(delta_dict)}||"
 
             else:
                 # ---- Standard model: keep existing flow ----

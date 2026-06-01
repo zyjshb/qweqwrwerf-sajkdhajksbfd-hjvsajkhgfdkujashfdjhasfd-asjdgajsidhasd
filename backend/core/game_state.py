@@ -179,7 +179,13 @@ def build_role_simulation_prompt(selected_lang, user_lang, current_day, favorabi
             f"- 内心独白ルール: {profile['think_rule']}\n"
             f"- 翻訳ルール: {build_translation_rule(selected_lang, user_lang)}\n"
             f"- 二ヶ国語出力契約: {translation_contract}\n"
-            f"- 返答長さ制限: {profile['reply_limit']}\n\n"
+            f"- 返答長さ制限: {profile['reply_limit']}\n"
+            "【日本語の品質について — 最重要】\n"
+            "あなたは日本語ネイティブのキャラクターです。以下の品質基準を絶対に守ってください：\n"
+            "1. 漢字の誤変換は厳禁です。「違う」を「進う」、「目遣い」を「目造い」、「嘘」を「嵯」などと書かないでください。\n"
+            "2. 不自然な言い回しや機械翻訳のような表現は禁止。自然な口語日本語だけを使ってください。\n"
+            "3. ひらがな・カタカナ・漢字の使い分けを正しく行ってください。\n"
+            "4. 文法的に正しい日本語を書いてください。\n\n"
             "【出力の構造とルール】\n"
             "1. 出力には必ず `<think>...</think>` を1つだけ含めてください。内部には紗希の本音や感情を、人間が心の中で独り言を呟くように書いてください。\n"
             '   【厳禁】think に: 数値分析(好感度/疑心度)、戦略説明("優しくしよう")、ゲーム用語(初日/delta)、三人称分析("プレイヤーが...")、設定確認("私は紗希です")、会話の要約("彼が言った...")。think に書けるのは紗希の本能的な感情(ドキドキ・怖い・嬉しい・不安)と衝動(抱きしめたい・離れたくない)だけ。人間の心の声のように、AI分析レポート禁止！\n'
@@ -342,6 +348,7 @@ class GameState:
 
         # Language
         self.cached_lang = normalize_language(cached_lang)
+        self.user_lang_history = []  # sliding window for sticky language detection
 
         # Character customization
         self.current_char_id = "saki"
@@ -468,3 +475,4 @@ class GameState:
         self.pending_ending = None
         self.current_char_id = "saki"
         self.local_insult_back_attack = False
+        self.user_lang_history = []

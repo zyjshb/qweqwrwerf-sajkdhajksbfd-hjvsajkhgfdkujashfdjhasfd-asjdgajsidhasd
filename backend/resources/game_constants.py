@@ -1087,6 +1087,27 @@ def detect_language(text, default_lang="中文"):
     return default_lang
 
 
+def detect_user_language_sticky(text, default_lang, history, window=5):
+    """Detect user language with sliding-window majority voting.
+
+    Prevents a single code-switched message (e.g. a Chinese player typing
+    'hello') from flipping the detected language.  Only sustained use of a
+    different language (majority of the last *window* messages) triggers a
+    switch.
+    """
+    raw = detect_language(text, default_lang)
+    history.append(raw)
+    if len(history) > window:
+        history.pop(0)
+
+    # Majority vote across the sliding window
+    counts = {}
+    for lang in history:
+        counts[lang] = counts.get(lang, 0) + 1
+    best = max(counts, key=counts.get)
+    return best
+
+
 
 
 

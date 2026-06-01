@@ -24,10 +24,10 @@ from core.game_state import GameState, normalize_delta_payload, align_delta_with
 from core.config import load_config, save_config
 from ai.api_client import fetch_api_response, _generate_mock_reply
 from ai.prompt_builder import get_system_prompt
-from ai.translator import parse_api_response
+from ai.translator import parse_api_response, auto_correct_japanese
 from audio.tts_client import TTSClient
 from resources.game_constants import (
-    normalize_language, detect_language, translation_required,
+    normalize_language, detect_language, detect_user_language_sticky, translation_required,
     LANGUAGE_PROFILES, build_offline_translation_line,
 )
 
@@ -142,8 +142,10 @@ class GameSession:
         self.state.cycle_id += 1
         cycle = self.state.cycle_id
 
-        # Choose UI language if player hasn't
-        user_lang = detect_language(user_input, self.state.cached_lang)
+        # Sticky language detection — won't flip on a single code-switched message
+        # Store on state so _process_reply can reuse without double-counting the history
+        self.state._last_detected_user_lang = detect_user_language_sticky(
+            user_input, self.state.cached_lang, self.state.user_lang_history)
 
         # Build system prompt
         sys_prompt = get_system_prompt(self.state)
@@ -231,9 +233,11 @@ class GameSession:
         think = parsed.get("think", "")
         if think:
             think = _strip_think_meta(think)
+            think = auto_correct_japanese(think)
             await self._safe_send(envelope_server("THINK_CHUNK", text=think))
 
-        user_lang = detect_language(user_input, self.state.cached_lang)
+        # Reuse the sticky detection already computed in _handle_chat (avoid double-counting)
+        user_lang = getattr(self.state, '_last_detected_user_lang', None) or detect_language(user_input, self.state.cached_lang)
 
         # Get spoken text — use parsed version (monologue stripped).
         # Fall back to raw reply if parsed spoken is empty (reasoning model edge case).
@@ -249,6 +253,7 @@ class GameSession:
         translation = ""
 
         if spoken:
+            clean_spoken = auto_correct_japanese(clean_spoken)
             await self._safe_send(envelope_server("SPEECH_CHUNK", text=clean_spoken))
 
             if not self.config.get("api_key"):
@@ -369,8 +374,12 @@ class GameSession:
                 ending=self.state.pending_ending,
             ))
 
-        # Add to chat history — trim to prevent unbounded growth
-        self.chat_history.append({"role": "assistant", "content": reply})
+        # Add to chat history — strip formatting cruft so the model
+        # only sees clean dialogue and doesn't learn garbled patterns.
+        clean_for_history = clean_spoken or spoken or reply
+        clean_for_history = re.sub(r'<think(?:ing)?>.*?</think(?:ing)?>', '', clean_for_history, flags=re.S | re.I)
+        clean_for_history = re.sub(r'\|\|.*?\|\|', '', clean_for_history).strip()
+        self.chat_history.append({"role": "assistant", "content": clean_for_history})
         MAX_HISTORY = 40  # keep system prompt + last ~20 exchanges
         if len(self.chat_history) > MAX_HISTORY:
             # Keep system prompt (index 0) and trim oldest messages after it
@@ -763,8 +772,8 @@ class GameSession:
         ))
 
         # Add to chat history (no translation for opening — player chose this language)
-        full_reply = f"<think>{think}</think>\n{spoken}"
-        self.chat_history.append({"role": "assistant", "content": full_reply})
+        # Add to chat history — clean spoken text only, no formatting cruft
+        self.chat_history.append({"role": "assistant", "content": spoken})
         await self._safe_send(envelope_server("CHAT_APPEND",
             role="assistant",
             content=spoken,
@@ -1019,4 +1028,13 @@ def _strip_think_meta(text: str) -> str:
     )
     # Clean up leading debris (dots, commas, whitespace)
     text = re.sub(r'^[.．…、，,\s]+', '', text)
+
+    # Strip paired full-width parentheses wrapping the ENTIRE think text.
+    # The frontend adds its own （ ） around think, so model-output parens
+    # would become doubled: （（...））.
+    if len(text) >= 4 and text[0] in '（(' and text[-1] in '）)':
+        inner = text[1:-1]
+        if not re.search(r'[（\(）\)]', inner):
+            text = inner
+
     return text.strip() or ""

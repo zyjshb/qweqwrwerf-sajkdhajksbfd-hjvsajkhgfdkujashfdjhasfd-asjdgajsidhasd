@@ -86,12 +86,8 @@ def _strip_monologue_from_spoken(text):
     if not text:
         return text
 
-    # Strip bare monologue before first action description
-    first_action = re.search(r'[（\(][^\)）\（\(]{1,40}[）\)]', text)
-    if first_action and first_action.start() > 5:
-        text = text[first_action.start():]
-
-    # Remove long parenthetical monologue blocks (>40 chars)
+    # Remove long parenthetical monologue blocks (>40 chars).
+    # Short blocks (≤40 chars) are treated as action descriptions and kept.
     result = []
     i = 0
     while i < len(text):
@@ -114,4 +110,89 @@ def _strip_monologue_from_spoken(text):
             result.append(text[i])
             i += 1
 
-    return ''.join(result).strip()
+    text = ''.join(result).strip()
+
+    # Strip a leading sequence of 2+ parenthetical blocks (inner-monologue
+    # fragments that leaked before the actual dialogue).  A single block is
+    # treated as a legitimate action description and kept.
+    leading = re.match(r'^([（\(][^）\)]*[）\)]\s*){2,}', text)
+    if leading:
+        after = text[leading.end():].strip()
+        if after:
+            text = after
+
+    return text
+
+
+# ── Japanese kanji hallucination auto-correction ─────────────────────
+# Reasoning models (deepseek-v4-pro etc.) occasionally confuse similar-
+# looking kanji in Japanese output: 違う→進う, 嘘→嵯, 遣い→造い, etc.
+# This map targets high-confidence errors; each key is a compiled regex.
+
+_JAPANESE_CORRECTIONS = [
+    # 違う (chigau — different / wrong)
+    (re.compile(r'進う'), '違う'),
+    # 嘘 (uso — lie)
+    (re.compile(r'嵯(?=だ|じゃ|つ|を|は|の|か|な|よ|ね|。|、|で|っ)'), '嘘'),
+    # 遣い (zukai — e.g. 上目遣い, 言葉遣い)
+    (re.compile(r'造い(?=に|は|が|を|の|で|。|、|見|睨|使)'), '遣い'),
+    # 約束 (yakusoku — promise)
+    (re.compile(r'約東'), '約束'),
+    # 誓う (chikau — swear)
+    (re.compile(r'誓ぅ'), '誓う'),
+    # 震え (furue — tremble)
+    (re.compile(r'震ぇ'), '震え'),
+    # 本当 (hontou — really)
+    (re.compile(r'本峠'), '本当'),
+    # 離れ (hanare — separate) ← 誰れ
+    (re.compile(r'誰れ(?=ない|た|て|る|そう|ば|。|、)'), '離れ'),
+    # 目 (me — eye) ← 日 (in compound contexts)
+    (re.compile(r'上日遣い'), '上目遣い'),
+    (re.compile(r'日が(?=.*?(震|潤|光|輝|合|覚|醒|冴|見開|閉|据))'), '目が'),
+    (re.compile(r'日を(?=.*?(見|開|閉|瞑|逸|細|輝|覚|醒|据|逸|背|伏))'), '目を'),
+    # 見つめ (mitsume — stare)
+    (re.compile(r'見つぬ'), '見つめ'),
+    # 一緒 (issho — together)
+    (re.compile(r'一緖'), '一緒'),
+    # 永遠 (eien — forever)
+    (re.compile(r'永道(?!に|を|が|の|は|で|、|。|り)'), '永遠'),
+    # 瞳 (hitomi — pupil) ← 睡孔 (hallucinated compound)
+    (re.compile(r'睡孔'), '瞳'),
+    # 頼が → 顔が (when blushing context)
+    (re.compile(r'頼が(?=.*?(赤|红|熱|火照|上気|染))'), '顔が'),
+    # Various ぃ→い endings (small-i kana hallucination)
+    (re.compile(r'嬉しぃ'), '嬉しい'),
+    (re.compile(r'怖ぃ'), '怖い'),
+    (re.compile(r'欲しぃ'), '欲しい'),
+    (re.compile(r'新しぃ'), '新しい'),
+    (re.compile(r'優しぃ'), '優しい'),
+    (re.compile(r'寂しぃ'), '寂しい'),
+    (re.compile(r'苦しぃ'), '苦しい'),
+    (re.compile(r'楽しぃ'), '楽しい'),
+    (re.compile(r'詳しぃ'), '詳しい'),
+    # ちゃんと (chanto — properly)
+    (re.compile(r'ちやんと'), 'ちゃんと'),
+    # ぎゅっと (gyutto — tightly)
+    (re.compile(r'ぎゆつと'), 'ぎゅっと'),
+    # ドキドキ (dokidoki — heartbeat)
+    (re.compile(r'ド丰'), 'ドキ'),
+    # バクバク (bakubaku — pounding)
+    (re.compile(r'バクパク'), 'バクバク'),
+    # そば (soba — beside) ← そば (itself correct, but そぱ → そば)
+    (re.compile(r'そぱ'), 'そば'),
+    # もう (mou — already) ← もぅ
+    (re.compile(r'もぅ'), 'もう'),
+]
+
+
+def auto_correct_japanese(text: str) -> str:
+    """Apply targeted kanji corrections for reasoning-model hallucinations.
+
+    Only fires on high-confidence patterns with context anchors.
+    Returns the corrected text.
+    """
+    if not text:
+        return text
+    for pattern, replacement in _JAPANESE_CORRECTIONS:
+        text = pattern.sub(replacement, text)
+    return text
